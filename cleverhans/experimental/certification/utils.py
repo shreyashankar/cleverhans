@@ -183,3 +183,11 @@ def minimum_eigen_vector(x, num_steps, learning_rate, vector_prod_fn):
   for _ in range(num_steps):
     x = eig_one_step(x, learning_rate, vector_prod_fn)
   return x
+
+def scipy_eig(matrix, eig_val_estimate=None):
+  if eig_val_estimate:
+      eig_val_estimate = eig_val_estimate[0][0]
+  min_eig_vec_val, estimated_eigen_vector = eigs(matrix_m, k=1, which='SR',
+                                                  tol=1E-4, sigma=eig_val_estimate)
+  min_eig_vec_val = np.reshape(np.real(min_eig_vec_val), [1, 1])
+  return np.reshape(estimated_eigen_vector, [-1, 1]), min_eig_vec_val

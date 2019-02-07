@@ -317,8 +317,8 @@ class DualFormulation(object):
     old_matrix_h = self.sess.run(self.matrix_h, feed_dict=dual_feed_dict)
     old_matrix_m = self.sess.run(self.matrix_m, feed_dict=dual_feed_dict)
 
-    min_eig_val_m, _ = eigs(old_matrix_m, k=1, which='LR',
-                            tol=1E-5, sigma=-0.1)
+    min_eig_val_m, _ = eigs(old_matrix_m, k=1, which='SR',
+                            tol=1E-5)
 
     min_eig_val_m = np.real(min_eig_val_m) - 1E-5
 
@@ -342,7 +342,7 @@ class DualFormulation(object):
     except np.linalg.LinAlgError:
       print("Increased min eigen value of H")
       min_eig_val_h = 2*min_eig_val_h
-    else:
+    else: 
       pass
     print("Min eig of h", min_eig_val_h)
 
@@ -379,10 +379,10 @@ class DualFormulation(object):
         cholesky(check_psd_matrix_m)
       except np.linalg.LinAlgError:
         print("Problem: Matrix is not PSD")
-      else:
-        print("All good: Matrix is PSD")
+      # else:
+      #   # print("All good: Matrix is PSD")
       computed_certificate = scalar_f + 0.5*second_term
-      print("Computed certificate", computed_certificate)
+      # print("Computed certificate", computed_certificate)
       current_certificate = np.minimum(computed_certificate, current_certificate)
 
     return current_certificate
