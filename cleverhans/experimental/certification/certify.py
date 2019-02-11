@@ -104,6 +104,8 @@ def main(_):
     if adv_class == FLAGS.true_class:
       continue
 
+    #TODO(shreya): if nn doesn't predict true label, don't bother running
+
     optimization_params = {
         'init_penalty': FLAGS.init_penalty,
         'large_eig_num_steps': FLAGS.large_eig_num_steps,

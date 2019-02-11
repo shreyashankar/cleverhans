@@ -45,6 +45,7 @@ class DualFormulation(object):
     self.adv_class = adv_class
     self.input_minval = tf.convert_to_tensor(input_minval, dtype=tf.float32)
     self.input_maxval = tf.convert_to_tensor(input_maxval, dtype=tf.float32)
+    # TODO(shreya): rescale epsilon based on input min and max vals
     self.epsilon = tf.convert_to_tensor(epsilon, dtype=tf.float32)
     self.final_linear = (self.nn_params.final_weights[adv_class, :]
                          - self.nn_params.final_weights[true_class, :])
@@ -351,6 +352,7 @@ class DualFormulation(object):
 
     new_lambda_lu_val = [np.copy(x) for x in lambda_lu_val]
     new_lambda_neg_val = [np.copy(x) for x in lambda_neg_val]
+    # TODO (shreya): project nu and make M PSD below
 
     for i in range(self.nn_params.num_hidden_layers + 1):
       # Making H PSD
@@ -363,11 +365,13 @@ class DualFormulation(object):
                                            new_lambda_neg_val[i]) +
                                np.multiply(self.switch_indices[i],
                                            np.maximum(new_lambda_neg_val[i], 0)))
+      # TODO (shreya): check if M is PSD via eigs. if not, continue slowly increasing nu (2x)
 
     dual_feed_dict.update(zip(self.lambda_lu, new_lambda_lu_val))
     dual_feed_dict.update(zip(self.lambda_neg, new_lambda_neg_val))
     scalar_f = self.sess.run(self.scalar_f, feed_dict=dual_feed_dict)
     vector_g = self.sess.run(self.vector_g, feed_dict=dual_feed_dict)
+    # TODO(shreya): check that solver outputs something reasonable
     x, _ = lgmres(linear_operator_h, vector_g)
     x = x.reshape((x.shape[0], 1))
     second_term = np.matmul(np.transpose(vector_g), x) + 0.05
