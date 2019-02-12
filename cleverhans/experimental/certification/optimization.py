@@ -12,6 +12,8 @@ import tensorflow as tf
 from tensorflow.contrib import autograph
 from cleverhans.experimental.certification import utils
 
+# TODO (shreya): figure out scipy flag
+
 # Bound on lowest value of certificate to check for numerical errors
 LOWER_CERT_BOUND = -10.0
 UPDATE_PARAM_CONSTANT = -0.1

@@ -14,6 +14,8 @@ from cleverhans.experimental.certification import utils
 flags = tf.app.flags
 FLAGS = flags.FLAGS
 
+TOL = 1E-5
+
 
 class DualFormulation(object):
   """DualFormulation is a class that creates the dual objective function
@@ -128,7 +130,8 @@ class DualFormulation(object):
     self.set_differentiable_objective()
     if not self.nn_params.has_conv:
       self.get_full_psd_matrix()
-      self.construct_certificate()
+      # TODO (shreya): remove construct certificate
+      # self.construct_certificate()
 
   def set_differentiable_objective(self):
     """Function that constructs minimization objective from dual variables."""
@@ -323,29 +326,53 @@ class DualFormulation(object):
     linear_operator = LinearOperator((dim, dim), matvec=np_vector_prod_fn)
     # Performing shift invert scipy operation when eig val estimate is available
     min_eig_val, _ = eigs(linear_operator,
-                            k=1, which='SR', tol=1E-5)
+                            k=1, which='SR', tol=TOL)
 
-    min_eig_val = np.real(min_eig_val) - 1E-5
+    min_eig_val = np.real(min_eig_val) - TOL
     return min_eig_val, linear_operator
+
+  def make_psd(self):
+    """Run binary search to find a value for nu that makes M PSD"""
+    nu = self.sess.run(self.nu)
+    min_eig_val_m, _ = self.compute_eigenvalue(self.matrix_m_dimension, self.get_psd_product)
+    lower_nu = nu
+    upper_nu = nu
+    num_iter = 0
+
+    # Find an upper bound on nu
+    while min_eig_val_m + 1E-3 < 0:
+      if num_iter >= 10:
+        break
+      num_iter += 1
+      upper_nu *= 1.1
+      min_eig_val_m, _ = self.compute_eigenvalue(self.matrix_m_dimension, self.get_psd_product, feed_dict={self.nu: upper_nu})
+
+    # Perform binary search to find best value of nu
+    while lower_nu <= upper_nu:
+      if num_iter >= 10:
+        break
+      num_iter += 1
+      mid_nu =  (lower_nu + upper_nu) / 2
+      min_eig_val_m, _ = self.compute_eigenvalue(self.matrix_m_dimension, self.get_psd_product, feed_dict={self.nu: mid_nu})
+      if min_eig_val_m + 1E-3 < 0:
+        lower_nu = mid_nu
+      else:
+        upper_nu = mid_nu
+    
+    self.sess.run(tf.assign(self.nu, nu))
 
   def compute_certificate(self):
     """ Function to compute the certificate based either current value
     or dual variables loaded from dual folder """
     lambda_neg_val = self.sess.run(self.lambda_neg)
     lambda_lu_val = self.sess.run(self.lambda_lu)
-    nu = self.sess.run(self.nu)
-    print(nu)
 
-    min_eig_val_m, _ = self.compute_eigenvalue(self.matrix_m_dimension, self.get_psd_product)
-    min_eig_val_h, linop = self.compute_eigenvalue(self.matrix_m_dimension - 1, self.get_h_product)
+    min_eig_val_h, _ = self.compute_eigenvalue(self.matrix_m_dimension - 1, self.get_h_product)
 
     dual_feed_dict = {}
 
     new_lambda_lu_val = [np.copy(x) for x in lambda_lu_val]
-    # x = x.reshape((x.shape[0], 1))
     new_lambda_neg_val = [np.copy(x) for x in lambda_neg_val]
-    # new_nu = [np.copy(x) for x in nu]
-    # TODO (shreya): project nu and make M PSD below
 
     for i in range(self.nn_params.num_hidden_layers + 1):
       # Making H PSD
@@ -358,24 +385,14 @@ class DualFormulation(object):
                                            new_lambda_neg_val[i]) +
                                np.multiply(self.switch_indices[i],
                                            np.maximum(new_lambda_neg_val[i], 0)))
-      if min_eig_val_m < 0:
-        print("Here")
-        nu *= 1.05
-        self.sess.run(tf.assign(self.nu, nu))
-        min_eig_val_m = self.compute_eigenvalue(self.matrix_m_dimension, self.get_psd_product)
-      # TODO (shreya): check if M is PSD via eigs. if not, continue slowly increasing nu (2x)
+    
+    # Make matrix M PSD
+    self.make_psd()
 
     dual_feed_dict.update(zip(self.lambda_lu, new_lambda_lu_val))
     dual_feed_dict.update(zip(self.lambda_neg, new_lambda_neg_val))
     scalar_f = self.sess.run(self.scalar_f, feed_dict=dual_feed_dict)
-    vector_g = self.sess.run(self.vector_g, feed_dict=dual_feed_dict)
-    # TODO(shreya): check that solver outputs something reasonable
-    x, _ = lgmres(linop, vector_g)
-    x = x.reshape((x.shape[0], 1))
-    test = np.matmul(np.transpose(vector_g), x) + 0.05
-    print(test)
     second_term = self.sess.run(self.nu, feed_dict=dual_feed_dict) + 0.05
-    print(second_term)
 
     computed_certificate = scalar_f + 0.5*second_term
 
