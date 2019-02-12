@@ -310,43 +310,31 @@ class DualFormulation(object):
         axis=0)
     return self.matrix_h, self.matrix_m
 
+  def compute_eigenvalue(self, dim, output_vector_func):
+    """Function to compute the minimum eigenvalue of a matrix."""
+    input_vector = tf.placeholder(tf.float32, shape=(dim, 1))
+    output_vector = output_vector_func(input_vector)
+
+    def np_vector_prod_fn(np_vector):
+      np_vector = np.reshape(np_vector, [-1, 1])
+      output_np_vector = self.sess.run(output_vector, feed_dict={input_vector:np_vector})
+      return output_np_vector
+    linear_operator = LinearOperator((dim, dim), matvec=np_vector_prod_fn)
+    # Performing shift invert scipy operation when eig val estimate is available
+    min_eig_val, _ = eigs(linear_operator,
+                            k=1, which='SR', tol=1E-5)
+
+    min_eig_val = np.real(min_eig_val) - 1E-5
+    return min_eig_val, linear_operator
+
   def compute_certificate(self):
     """ Function to compute the certificate based either current value
     or dual variables loaded from dual folder """
     lambda_neg_val = self.sess.run(self.lambda_neg)
     lambda_lu_val = self.sess.run(self.lambda_lu)
 
-    # old_matrix_h, old_matrix_m = self.sess.run([self.matrix_h, self.matrix_m])
-
-    input_vector_m = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension, 1))
-    output_vector_m = self.get_psd_product(input_vector_m)
-
-    def np_vector_prod_fn_m(np_vector):
-      np_vector = np.reshape(np_vector, [-1, 1])
-      output_np_vector = self.sess.run(output_vector_m, feed_dict={input_vector_m:np_vector})
-      return output_np_vector
-    linear_operator_m = LinearOperator((self.matrix_m_dimension, self.matrix_m_dimension), matvec=np_vector_prod_fn_m)
-    # Performing shift invert scipy operation when eig val estimate is available
-    min_eig_val_m, _ = eigs(linear_operator_m,
-                            k=1, which='SR', tol=1E-5)
-
-    min_eig_val_m = np.real(min_eig_val_m) - 1E-5
-
-    input_vector_h = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension - 1, 1))
-    output_vector_h = self.get_h_product(input_vector_h)
-
-    def np_vector_prod_fn_h(np_vector):
-      np_vector = np.reshape(np_vector, [-1, 1])
-      output_np_vector = self.sess.run(output_vector_h, feed_dict={input_vector_h:np_vector})
-      return output_np_vector
-    linear_operator_h = LinearOperator((self.matrix_m_dimension - 1,
-                                        self.matrix_m_dimension - 1),
-                                       matvec=np_vector_prod_fn_h)
-    # Performing shift invert scipy operation when eig val estimate is available
-    min_eig_val_h, _ = eigs(linear_operator_h,
-                            k=1, which='SR', tol=1E-5)
-
-    min_eig_val_h = np.real(min_eig_val_h) - 1E-5
+    min_eig_val_m, _ = self.compute_eigenvalue(self.matrix_m_dimension, self.get_psd_product)
+    min_eig_val_h, linop = self.compute_eigenvalue(self.matrix_m_dimension - 1, self.get_h_product)
 
     dual_feed_dict = {}
 
@@ -372,7 +360,7 @@ class DualFormulation(object):
     scalar_f = self.sess.run(self.scalar_f, feed_dict=dual_feed_dict)
     vector_g = self.sess.run(self.vector_g, feed_dict=dual_feed_dict)
     # TODO(shreya): check that solver outputs something reasonable
-    x, _ = lgmres(linear_operator_h, vector_g)
+    x, _ = lgmres(linop, vector_g)
     x = x.reshape((x.shape[0], 1))
     second_term = np.matmul(np.transpose(vector_g), x) + 0.05
 
