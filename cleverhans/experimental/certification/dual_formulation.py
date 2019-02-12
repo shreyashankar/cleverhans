@@ -310,14 +310,15 @@ class DualFormulation(object):
         axis=0)
     return self.matrix_h, self.matrix_m
 
-  def compute_eigenvalue(self, dim, output_vector_func):
+  def compute_eigenvalue(self, dim, output_vector_func, feed_dict={}):
     """Function to compute the minimum eigenvalue of a matrix."""
     input_vector = tf.placeholder(tf.float32, shape=(dim, 1))
     output_vector = output_vector_func(input_vector)
 
     def np_vector_prod_fn(np_vector):
       np_vector = np.reshape(np_vector, [-1, 1])
-      output_np_vector = self.sess.run(output_vector, feed_dict={input_vector:np_vector})
+      feed_dict[input_vector] = np_vector
+      output_np_vector = self.sess.run(output_vector, feed_dict=feed_dict)
       return output_np_vector
     linear_operator = LinearOperator((dim, dim), matvec=np_vector_prod_fn)
     # Performing shift invert scipy operation when eig val estimate is available
@@ -332,6 +333,8 @@ class DualFormulation(object):
     or dual variables loaded from dual folder """
     lambda_neg_val = self.sess.run(self.lambda_neg)
     lambda_lu_val = self.sess.run(self.lambda_lu)
+    nu = self.sess.run(self.nu)
+    print(nu)
 
     min_eig_val_m, _ = self.compute_eigenvalue(self.matrix_m_dimension, self.get_psd_product)
     min_eig_val_h, linop = self.compute_eigenvalue(self.matrix_m_dimension - 1, self.get_h_product)
@@ -339,7 +342,9 @@ class DualFormulation(object):
     dual_feed_dict = {}
 
     new_lambda_lu_val = [np.copy(x) for x in lambda_lu_val]
+    # x = x.reshape((x.shape[0], 1))
     new_lambda_neg_val = [np.copy(x) for x in lambda_neg_val]
+    # new_nu = [np.copy(x) for x in nu]
     # TODO (shreya): project nu and make M PSD below
 
     for i in range(self.nn_params.num_hidden_layers + 1):
@@ -353,6 +358,11 @@ class DualFormulation(object):
                                            new_lambda_neg_val[i]) +
                                np.multiply(self.switch_indices[i],
                                            np.maximum(new_lambda_neg_val[i], 0)))
+      if min_eig_val_m < 0:
+        print("Here")
+        nu *= 1.05
+        self.sess.run(tf.assign(self.nu, nu))
+        min_eig_val_m = self.compute_eigenvalue(self.matrix_m_dimension, self.get_psd_product)
       # TODO (shreya): check if M is PSD via eigs. if not, continue slowly increasing nu (2x)
 
     dual_feed_dict.update(zip(self.lambda_lu, new_lambda_lu_val))
@@ -362,7 +372,10 @@ class DualFormulation(object):
     # TODO(shreya): check that solver outputs something reasonable
     x, _ = lgmres(linop, vector_g)
     x = x.reshape((x.shape[0], 1))
-    second_term = np.matmul(np.transpose(vector_g), x) + 0.05
+    test = np.matmul(np.transpose(vector_g), x) + 0.05
+    print(test)
+    second_term = self.sess.run(self.nu, feed_dict=dual_feed_dict) + 0.05
+    print(second_term)
 
     computed_certificate = scalar_f + 0.5*second_term
 
