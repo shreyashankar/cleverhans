@@ -63,6 +63,8 @@ flags.DEFINE_enum('verbosity', 'INFO',
                   'Logging verbosity level.')
 flags.DEFINE_string('eig_type', 'SCIPY',
                     'Method to compute eigenvalues (TF or SCIPY), SCIPY')
+flags.DEFINE_integer('lanczos_steps', 100,
+                     'Number of steps to perform in Lanczos method.')
 
 dataset = 'MNIST'
 
@@ -122,7 +124,8 @@ def main(_):
         'print_stats_steps': FLAGS.print_stats_steps,
         'stats_folder': FLAGS.stats_folder,
         'projection_steps': FLAGS.projection_steps,
-        'eig_type': FLAGS.eig_type
+        'eig_type': FLAGS.eig_type,
+        'lanczos_steps': FLAGS.lanczos_steps
     }
     with tf.Session() as sess:
       dual = dual_formulation.DualFormulation(sess,

@@ -93,6 +93,67 @@ def initialize_dual(neural_net_params_object, init_dual_file=None,
               'lambda_quad': lambda_quad, 'lambda_lu': lambda_lu, 'nu': nu}
   return dual_var
 
+def lanczos_decomp(vector_prod_fn, n, k):
+  """Function that performs the Lanczos algorithm on a matrix.
+
+  Args:
+    vector_prod_fn: function which returns product H*x, where H is a matrix for
+      which we computing eigenvector.
+    n: dimensionality of matrix H
+    k: number of iterations and dimensionality of the tridiagonal matrix to
+      return
+  
+  Returns:
+    d: vector of diagonal elements of T
+    e: vector of off-diagonal elements of T
+    V: orthonormal basis matrix for the Krylov subspace
+  """
+  # Choose random initial vector of dimentionality n
+  v = tf.random_uniform([n, 1])
+  v = v / tf.norm(v)
+
+  # Compute first w
+  w = vector_prod_fn(v)
+  alpha = tf.matmul(tf.transpose(w), v)
+  w -= alpha * v
+
+  # Set T and V
+  d = alpha
+  e = alpha
+  V = v
+
+  # Compute rest of basis vectors
+  for i in range(1, k):
+    prev_v = v
+    beta = tf.norm(w)
+    # if beta != 0:
+    v = w / beta
+    # else:
+    #   # TODO(Shreya): make this orthonormal to other vectors
+    #   v = tf.random_uniform([n, 1])
+    #   v = v / tf.norm(v)
+    w = vector_prod_fn(v)
+    alpha = tf.matmul(tf.transpose(w), v)
+    w = w - alpha * v - beta * prev_v
+    beta = tf.reshape(beta, [1, 1])
+
+    # Set T and V
+    d = tf.concat([d, alpha], axis=0)
+    V = tf.concat([V, v], axis=0)
+    e = tf.concat([e, beta], axis=0)
+  
+  # Compute beta and set T
+  beta = tf.norm(w)
+  beta = tf.reshape(beta, [1, 1])
+  e = tf.concat([e, beta], axis=0)
+
+  # Squeeze dims
+  d = tf.squeeze(d)
+  e = tf.squeeze(e)
+
+  e = tf.slice(e, begin=[1], size=[-1])
+
+  return d, e, V
 
 def eig_one_step(current_vector, learning_rate, vector_prod_fn):
   """Function that performs one step of gd (variant) for min eigen value.

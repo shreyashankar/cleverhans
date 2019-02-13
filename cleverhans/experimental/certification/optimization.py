@@ -8,6 +8,7 @@ import os
 import numpy as np
 
 from scipy.sparse.linalg import eigs, LinearOperator
+from scipy.linalg import eigh_tridiagonal
 import tensorflow as tf
 from tensorflow.contrib import autograph
 from cleverhans.experimental.certification import utils
@@ -110,6 +111,44 @@ class Optimization(object):
         vector_prod_fn=_vector_prod_fn)
     return estimated_eigen_vector
 
+  def construct_lanczos_params(self, k):
+    """Computes matrices T and V using the Lanczos algorithm.
+    
+    Args:
+      k: number of iterations and dimensionality of the tridiagonal matrix
+    Returns:
+      eig_vec: eigen vector corresponding to min eigenvalue
+    """
+    # Using autograph to automatically handle
+    # the control flow of minimum_eigen_vector
+    min_eigen_vec = autograph.to_graph(utils.lanczos_decomp)
+
+    def _vector_prod_fn(x):
+      return self.dual_object.get_psd_product(x)
+    
+    self.d, self.e, self.V = min_eigen_vec(_vector_prod_fn, self.dual_object.matrix_m_dimension, k)
+
+  def get_lanczos_eig_vec(self):
+    """Computes the min eigen value and corresponding vector of matrix M
+    using the Lanczos algorithm.
+    
+    Returns:
+      eig_val: Minimum absolute eigen value
+      eig_vec: Corresponding eigen vector"""
+    d, e, V = self.sess.run([self.d, self.e, self.V])
+    e = e[1:]
+    print(d)
+    print(d.shape)
+    print(e.shape)
+    print(V.shape)
+    # d = np.squeeze(d)
+    
+    # Compute eigenvector of tridiagonal matrix
+    eigs, eig_vecs = eigh_tridiagonal(d, e)
+
+    # Multiply by V to get the eigenvector for M
+    return np.matmul(V, eig_vecs[0]).reshape((self.dual_object.matrix_m_dimension, 1)), eigs[0]
+
   def get_scipy_eig_vec(self):
     """Computes scipy estimate of min eigenvalue for matrix M.
 
@@ -144,6 +183,8 @@ class Optimization(object):
     if self.params['eig_type'] == 'TF':
       self.eig_vec_estimate = self.get_min_eig_vec_proxy()
     else:
+      if self.params['eig_type'] == 'LZS':
+        self.construct_lanczos_params(self.params['lanczos_steps'])
       self.eig_vec_estimate = tf.placeholder(tf.float32, shape=(self.dual_object.matrix_m_dimension, 1))
     self.stopped_eig_vec_estimate = tf.stop_gradient(self.eig_vec_estimate)
     # Eig value is v^\top M v, where v is eigen vector
@@ -245,6 +286,12 @@ class Optimization(object):
 
     if self.params['eig_type'] == 'SCIPY_FF' or self.params['eig_type'] == 'SCIPY_CONV':
       current_eig_vector, self.current_eig_val_estimate = self.get_scipy_eig_vec()
+      print(self.current_eig_val_estimate)
+      step_feed_dict.update({
+          self.eig_vec_estimate: current_eig_vector
+      })
+    elif self.params['eig_type'] == 'LZS':
+      current_eig_vector, self.current_eig_val_estimate = self.get_lanczos_eig_vec()
       print(self.current_eig_val_estimate)
       step_feed_dict.update({
           self.eig_vec_estimate: current_eig_vector
