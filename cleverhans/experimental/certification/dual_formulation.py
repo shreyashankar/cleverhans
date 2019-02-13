@@ -335,6 +335,7 @@ class DualFormulation(object):
     """Run binary search to find a value for nu that makes M PSD"""
     nu = self.sess.run(self.nu)
     min_eig_val_m, _ = self.compute_eigenvalue(self.matrix_m_dimension, self.get_psd_product)
+    print("MIN eig val m: " + str(min_eig_val_m))
     lower_nu = nu
     upper_nu = nu
     num_iter = 0

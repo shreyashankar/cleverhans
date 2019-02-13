@@ -137,14 +137,10 @@ class Optimization(object):
       eig_vec: Corresponding eigen vector"""
     d, e, V = self.sess.run([self.d, self.e, self.V])
     e = e[1:]
-    print(d)
-    print(d.shape)
-    print(e.shape)
-    print(V.shape)
-    # d = np.squeeze(d)
     
     # Compute eigenvector of tridiagonal matrix
     eigs, eig_vecs = eigh_tridiagonal(d, e)
+    print(eigs)
 
     # Multiply by V to get the eigenvector for M
     return np.matmul(V, eig_vecs[0]).reshape((self.dual_object.matrix_m_dimension, 1)), eigs[0]

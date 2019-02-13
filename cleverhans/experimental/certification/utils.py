@@ -109,8 +109,7 @@ def lanczos_decomp(vector_prod_fn, n, k):
     V: orthonormal basis matrix for the Krylov subspace
   """
   # Choose random initial vector of dimentionality n
-  v = tf.random_uniform([n, 1])
-  v = v / tf.norm(v)
+  v = tf.nn.l2_normalize(tf.random_uniform([n, 1]))
 
   # Compute first w
   w = vector_prod_fn(v)
@@ -126,12 +125,10 @@ def lanczos_decomp(vector_prod_fn, n, k):
   for i in range(1, k):
     prev_v = v
     beta = tf.norm(w)
-    # if beta != 0:
-    v = w / beta
-    # else:
-    #   # TODO(Shreya): make this orthonormal to other vectors
-    #   v = tf.random_uniform([n, 1])
-    #   v = v / tf.norm(v)
+    if beta != 0:
+      v = w / beta
+    else:
+      v = tf.nn.l2_normalize(tf.random_uniform([n, 1]))
     w = vector_prod_fn(v)
     alpha = tf.matmul(tf.transpose(w), v)
     w = w - alpha * v - beta * prev_v
@@ -139,7 +136,7 @@ def lanczos_decomp(vector_prod_fn, n, k):
 
     # Set T and V
     d = tf.concat([d, alpha], axis=0)
-    V = tf.concat([V, v], axis=0)
+    V = tf.concat([V, v], axis=1)
     e = tf.concat([e, beta], axis=0)
   
   # Compute beta and set T
