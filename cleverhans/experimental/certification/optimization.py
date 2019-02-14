@@ -6,6 +6,7 @@ from __future__ import print_function
 import json
 import os
 import numpy as np
+import time
 
 from scipy.sparse.linalg import eigs, LinearOperator
 from scipy.linalg import eigh_tridiagonal
@@ -121,12 +122,45 @@ class Optimization(object):
     """
     # Using autograph to automatically handle
     # the control flow of minimum_eigen_vector
-    min_eigen_vec = autograph.to_graph(utils.lanczos_decomp)
+    self.min_eigen_vec = autograph.to_graph(utils.lanczos_decomp)
 
     def _vector_prod_fn(x):
       return self.dual_object.get_psd_product(x)
+    # self.test_mat = np.eye(self.dual_object.matrix_m_dimension)
+    # self.test_mat[0, 0] = -10
+    # self.tf_test_mat = tf.convert_to_tensor(self.test_mat, dtype=tf.float32)
+    # def _vector_prod_fn(x):
+    #   return tf.matmul(self.tf_test_mat, x)
     
-    self.d, self.e, self.V = min_eigen_vec(_vector_prod_fn, self.dual_object.matrix_m_dimension, k)
+    self.d, self.e, self.V = self.min_eigen_vec(_vector_prod_fn, 0, self.dual_object.matrix_m_dimension, 5)
+  
+  def eigen_tridiagonal(self, alpha, beta, max=True):
+    eig_values, eig_vectors = eigh_tridiagonal(alpha, beta)
+    if max:
+      ind_eig = np.argmax(np.abs(eig_values))
+    else:
+      ind_eig = np.argmin(np.abs(eig_values))
+    eig = eig_values[ind_eig]
+    eig_vector = eig_vectors[:, ind_eig]
+    return eig, eig_vector, eig_vectors, eig_values
+  
+  def get_lanczos_eig_vec_np(self):
+    test_mat = np.eye(self.dual_object.matrix_m_dimension)
+    test_mat[0, 0] = -10
+    def _vector_prod_fn(x):
+      # return np.matmul(test_mat, x)
+      return self.sess.run(self.dual_object.get_psd_product(x))
+    alpha, beta, Q = utils.python_lanczos(_vector_prod_fn, 0, self.dual_object.matrix_m_dimension, 5)
+    max_eig_1, _, _, _ = self.eigen_tridiagonal(alpha, beta[1:len(alpha)])
+    alpha, beta, Q = utils.python_lanczos(_vector_prod_fn, max_eig_1, self.dual_object.matrix_m_dimension, self.params['lanczos_steps'])
+    max_eig, max_vec, _, allthem = self.eigen_tridiagonal(alpha, beta[1:len(alpha)])
+    max_eig += max_eig_1
+    print(allthem)
+    print(max_vec.shape)
+    Q = Q[:,1:-1]
+    min_eig_vec = np.matmul(Q, max_vec).reshape((self.dual_object.matrix_m_dimension, 1))
+    return min_eig_vec, max_eig
+
 
   def get_lanczos_eig_vec(self):
     """Computes the min eigen value and corresponding vector of matrix M
@@ -137,13 +171,37 @@ class Optimization(object):
       eig_vec: Corresponding eigen vector"""
     d, e, V = self.sess.run([self.d, self.e, self.V])
     e = e[1:]
-    
-    # Compute eigenvector of tridiagonal matrix
-    eigs, eig_vecs = eigh_tridiagonal(d, e)
-    print(eigs)
+        
+    # Compute max eig of tridiagonal matrix
+    # eigs, eig_vecs = eigh_tridiagonal(d, e)
+    max_eig_1, _, _, _ = self.eigen_tridiagonal(d, e)
+    print(max_eig_1)
 
-    # Multiply by V to get the eigenvector for M
-    return np.matmul(V, eig_vecs[0]).reshape((self.dual_object.matrix_m_dimension, 1)), eigs[0]
+    # M_hat = M - max_eig * M. Compute max eig of resulting tridiagonal matrix
+    start = time.time()
+    def _vector_prod_fn(x):
+      return self.dual_object.get_psd_product(x)
+    
+    d_hat, e_hat, V_hat = self.min_eigen_vec(_vector_prod_fn, max_eig_1, self.dual_object.matrix_m_dimension, 10)
+    d_hat, e_hat, V_hat = self.sess.run([d_hat, e_hat, V_hat])
+    e_hat = e_hat[1:]
+    print("2nd iter has " + str(time.time() - start) + " sec elapsed")
+    start = time.time()
+
+    max_eig, max_vec, _, allthem = self.eigen_tridiagonal(d_hat, e_hat)
+    max_eig += max_eig_1
+    print("2nd eigh has " + str(time.time() - start) + " sec elapsed")
+    # print(eigs_hat)
+
+    # Multiply by V_hat to get the eigenvector for M
+    min_eig_vec = np.matmul(V_hat, max_vec).reshape((self.dual_object.matrix_m_dimension, 1))
+    # print("norm of min vec: " + str(np.linalg.norm(min_eig_vec)))
+    # Mx = np.matmul(self.test_mat, min_eig_vec)
+    # print("xTMx: " + str(np.matmul(min_eig_vec.T, Mx)))
+    # lx = eigs[0] * min_eig_vec
+    # print(np.linalg.norm(Mx - lx))
+
+    return min_eig_vec, max_eig
 
   def get_scipy_eig_vec(self):
     """Computes scipy estimate of min eigenvalue for matrix M.
@@ -287,7 +345,7 @@ class Optimization(object):
           self.eig_vec_estimate: current_eig_vector
       })
     elif self.params['eig_type'] == 'LZS':
-      current_eig_vector, self.current_eig_val_estimate = self.get_lanczos_eig_vec()
+      current_eig_vector, self.current_eig_val_estimate = self.get_lanczos_eig_vec_np()
       print(self.current_eig_val_estimate)
       step_feed_dict.update({
           self.eig_vec_estimate: current_eig_vector

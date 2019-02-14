@@ -63,7 +63,7 @@ flags.DEFINE_enum('verbosity', 'INFO',
                   'Logging verbosity level.')
 flags.DEFINE_string('eig_type', 'SCIPY',
                     'Method to compute eigenvalues (TF or SCIPY), SCIPY')
-flags.DEFINE_integer('lanczos_steps', 100,
+flags.DEFINE_integer('lanczos_steps', 10,
                      'Number of steps to perform in Lanczos method.')
 
 dataset = 'MNIST'

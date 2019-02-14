@@ -93,12 +93,33 @@ def initialize_dual(neural_net_params_object, init_dual_file=None,
               'lambda_quad': lambda_quad, 'lambda_lu': lambda_lu, 'nu': nu}
   return dual_var
 
-def lanczos_decomp(vector_prod_fn, n, k):
+def python_lanczos(vector_prod_fn, scalar, n, k):
+  """Python version of lanczos for testing purposes"""
+  b = np.random.uniform(0,1,n)
+  Q = np.zeros([n, k+2], dtype = np.float32)
+  Q[:, 1] = b/np.linalg.norm(b)
+
+  # diagonals of the tridiagonal matrix
+  beta = [0]
+  alpha = []
+
+  for i in range(k):
+    v = vector_prod_fn(Q[:,i+1].reshape((n, 1))) - scalar * Q[:,i+1].reshape((n, 1))
+    v = v.reshape((n,))
+    alpha.append(np.sum(Q[:,i+1] * v))
+    v = v-beta[-1]*Q[:,i]-alpha[-1]*Q[:,i+1]
+    beta.append(np.linalg.norm(v))
+    Q[:,i+2] = v/(beta[-1]+1e-8)
+  
+  return alpha, beta, Q
+
+def lanczos_decomp(vector_prod_fn, scalar, n, k):
   """Function that performs the Lanczos algorithm on a matrix.
 
   Args:
     vector_prod_fn: function which returns product H*x, where H is a matrix for
       which we computing eigenvector.
+    scalar: quantity to scale the product returned by vector_prod_fn by
     n: dimensionality of matrix H
     k: number of iterations and dimensionality of the tridiagonal matrix to
       return
@@ -112,7 +133,7 @@ def lanczos_decomp(vector_prod_fn, n, k):
   v = tf.nn.l2_normalize(tf.random_uniform([n, 1]))
 
   # Compute first w
-  w = vector_prod_fn(v)
+  w = vector_prod_fn(v) - scalar * v
   alpha = tf.matmul(tf.transpose(w), v)
   w -= alpha * v
 
@@ -129,7 +150,7 @@ def lanczos_decomp(vector_prod_fn, n, k):
       v = w / beta
     else:
       v = tf.nn.l2_normalize(tf.random_uniform([n, 1]))
-    w = vector_prod_fn(v)
+    w = vector_prod_fn(v) - scalar * v
     alpha = tf.matmul(tf.transpose(w), v)
     w = w - alpha * v - beta * prev_v
     beta = tf.reshape(beta, [1, 1])
