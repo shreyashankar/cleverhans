@@ -6,6 +6,7 @@ from __future__ import print_function
 
 import numpy as np
 import tensorflow as tf
+import time
 
 
 def diag(diag_elements):
@@ -93,7 +94,7 @@ def initialize_dual(neural_net_params_object, init_dual_file=None,
               'lambda_quad': lambda_quad, 'lambda_lu': lambda_lu, 'nu': nu}
   return dual_var
 
-def python_lanczos(vector_prod_fn, scalar, n, k):
+def python_lanczos(vector_prod_fn, scalar, n, k, logging=False):
   """Python version of lanczos for testing purposes"""
   b = np.random.uniform(0,1,n)
   Q = np.zeros([n, k+2], dtype = np.float32)
@@ -102,76 +103,106 @@ def python_lanczos(vector_prod_fn, scalar, n, k):
   # diagonals of the tridiagonal matrix
   beta = [0]
   alpha = []
+  tim = 0
 
   for i in range(k):
+    start = time.time()
     v = vector_prod_fn(Q[:,i+1].reshape((n, 1))) - scalar * Q[:,i+1].reshape((n, 1))
+    end = time.time()
+    tim += end - start
     v = v.reshape((n,))
     alpha.append(np.sum(Q[:,i+1] * v))
     v = v-beta[-1]*Q[:,i]-alpha[-1]*Q[:,i+1]
     beta.append(np.linalg.norm(v))
     Q[:,i+2] = v/(beta[-1]+1e-8)
   
+  if logging:
+    print("vector prod time: " + str(tim))
   return alpha, beta, Q
 
 def lanczos_decomp(vector_prod_fn, scalar, n, k):
-  """Function that performs the Lanczos algorithm on a matrix.
+  Q = tf.zeros([n, 1])
+  v = tf.random_uniform([n, 1])
+  v = v / tf.norm(v)
+  Q = tf.concat([Q, v], axis=1)
 
-  Args:
-    vector_prod_fn: function which returns product H*x, where H is a matrix for
-      which we computing eigenvector.
-    scalar: quantity to scale the product returned by vector_prod_fn by
-    n: dimensionality of matrix H
-    k: number of iterations and dimensionality of the tridiagonal matrix to
-      return
+  # diagonals of the tridiagonal matrix
+  beta = tf.reshape(tf.constant(0, dtype=tf.float32), [1,])
+  alpha = tf.reshape(tf.constant(0, dtype=tf.float32), [1,])
+
+  for i in range(k):
+    v = vector_prod_fn(tf.reshape(Q[:, i+1], [n, 1])) - tf.scalar_mul(scalar, tf.reshape(Q[:, i+1], [n, 1]))
+    v = tf.reshape(v, [n,])
+    curr_alpha = tf.reshape(tf.reduce_sum(tf.multiply(v, Q[:, i+1])), [1,])
+    alpha = tf.concat([alpha, curr_alpha], axis=0)
+    v = v-beta[-1]*Q[:,i]-alpha[-1]*Q[:,i+1]
+    curr_beta = tf.reshape(tf.norm(v), [1,])
+    beta = tf.concat([beta, curr_beta], axis=0)
+    curr_norm = tf.reshape(v/(beta[-1]+1e-8), [n,1])
+    Q = tf.concat([Q, curr_norm], axis=1)
   
-  Returns:
-    d: vector of diagonal elements of T
-    e: vector of off-diagonal elements of T
-    V: orthonormal basis matrix for the Krylov subspace
-  """
-  # Choose random initial vector of dimentionality n
-  v = tf.nn.l2_normalize(tf.random_uniform([n, 1]))
+  alpha = tf.slice(alpha, begin=[1], size=[-1])
+  return alpha, beta, Q
 
-  # Compute first w
-  w = vector_prod_fn(v) - scalar * v
-  alpha = tf.matmul(tf.transpose(w), v)
-  w -= alpha * v
+# def lanczos_decomp(vector_prod_fn, scalar, n, k):
+#   """Function that performs the Lanczos algorithm on a matrix.
 
-  # Set T and V
-  d = alpha
-  e = alpha
-  V = v
-
-  # Compute rest of basis vectors
-  for i in range(1, k):
-    prev_v = v
-    beta = tf.norm(w)
-    if beta != 0:
-      v = w / beta
-    else:
-      v = tf.nn.l2_normalize(tf.random_uniform([n, 1]))
-    w = vector_prod_fn(v) - scalar * v
-    alpha = tf.matmul(tf.transpose(w), v)
-    w = w - alpha * v - beta * prev_v
-    beta = tf.reshape(beta, [1, 1])
-
-    # Set T and V
-    d = tf.concat([d, alpha], axis=0)
-    V = tf.concat([V, v], axis=1)
-    e = tf.concat([e, beta], axis=0)
+#   Args:
+#     vector_prod_fn: function which returns product H*x, where H is a matrix for
+#       which we computing eigenvector.
+#     scalar: quantity to scale the product returned by vector_prod_fn by
+#     n: dimensionality of matrix H
+#     k: number of iterations and dimensionality of the tridiagonal matrix to
+#       return
   
-  # Compute beta and set T
-  beta = tf.norm(w)
-  beta = tf.reshape(beta, [1, 1])
-  e = tf.concat([e, beta], axis=0)
+#   Returns:
+#     d: vector of diagonal elements of T
+#     e: vector of off-diagonal elements of T
+#     V: orthonormal basis matrix for the Krylov subspace
+#   """
+#   # Choose random initial vector of dimentionality n
+#   v = tf.nn.l2_normalize(tf.random_uniform([n, 1]))
 
-  # Squeeze dims
-  d = tf.squeeze(d)
-  e = tf.squeeze(e)
+#   # Compute first w
+#   w = vector_prod_fn(v) - scalar * v
+#   alpha = tf.matmul(tf.transpose(w), v)
+#   w -= alpha * v
 
-  e = tf.slice(e, begin=[1], size=[-1])
+#   # Set T and V
+#   d = alpha
+#   e = alpha
+#   V = v
 
-  return d, e, V
+#   # Compute rest of basis vectors
+#   for i in range(1, k):
+#     prev_v = v
+#     beta = tf.norm(w)
+#     if beta != 0:
+#       v = w / beta
+#     else:
+#       v = tf.nn.l2_normalize(tf.random_uniform([n, 1]))
+#     w = vector_prod_fn(v) - scalar * v
+#     alpha = tf.matmul(tf.transpose(w), v)
+#     w = w - alpha * v - beta * prev_v
+#     beta = tf.reshape(beta, [1, 1])
+
+#     # Set T and V
+#     d = tf.concat([d, alpha], axis=0)
+#     V = tf.concat([V, v], axis=1)
+#     e = tf.concat([e, beta], axis=0)
+  
+#   # Compute beta and set T
+#   beta = tf.norm(w)
+#   beta = tf.reshape(beta, [1, 1])
+#   e = tf.concat([e, beta], axis=0)
+
+#   # Squeeze dims
+#   d = tf.squeeze(d)
+#   e = tf.squeeze(e)
+
+#   e = tf.slice(e, begin=[1], size=[-1])
+
+#   return d, e, V
 
 def eig_one_step(current_vector, learning_rate, vector_prod_fn):
   """Function that performs one step of gd (variant) for min eigen value.

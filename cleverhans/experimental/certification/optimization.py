@@ -54,6 +54,10 @@ class Optimization(object):
     self.eig_num_iter_placeholder = tf.placeholder(tf.int32, shape=[])
     self.current_eig_val_estimate = None
 
+    # Initialize matrix-vector products
+    self.vec_prod_input = tf.placeholder(tf.float32, shape=[self.dual_object.matrix_m_dimension, 1])
+    self.vec_prod_result = self.dual_object.get_psd_product(self.vec_prod_input)
+
     # Create graph for optimization
     self.prepare_for_optimization()
 
@@ -126,13 +130,12 @@ class Optimization(object):
 
     def _vector_prod_fn(x):
       return self.dual_object.get_psd_product(x)
-    # self.test_mat = np.eye(self.dual_object.matrix_m_dimension)
-    # self.test_mat[0, 0] = -10
-    # self.tf_test_mat = tf.convert_to_tensor(self.test_mat, dtype=tf.float32)
-    # def _vector_prod_fn(x):
-    #   return tf.matmul(self.tf_test_mat, x)
+      # return self.sess.run(self.vec_prod_result, feed_dict={self.vec_prod_input: self.sess.run(x)})
     
-    self.d, self.e, self.V = self.min_eigen_vec(_vector_prod_fn, 0, self.dual_object.matrix_m_dimension, 5)
+    self.alpha, self.beta, self.W = self.min_eigen_vec(_vector_prod_fn, 0, self.dual_object.matrix_m_dimension, 5)
+
+    self.eig_max_placeholder = tf.placeholder(tf.float32, shape=[])
+    self.alpha_hat, self.beta_hat, self.W_hat = self.min_eigen_vec(_vector_prod_fn, self.eig_max_placeholder, self.dual_object.matrix_m_dimension, 10)
   
   def eigen_tridiagonal(self, alpha, beta, max=True):
     eig_values, eig_vectors = eigh_tridiagonal(alpha, beta)
@@ -145,6 +148,14 @@ class Optimization(object):
     return eig, eig_vector, eig_vectors, eig_values
   
   def get_lanczos_eig_vec_np(self):
+
+
+    # def __init__(...):
+    #   self.inp_vec = tf.placeholder(...)
+    #   self.vec_prod_result = self.dual_object.get_psd_product(inp_vec)
+    # ...
+    # def _vector_prod_fn(x):
+    #  return self.sess.run(self.vec_prod_result, feed_dict={self.inp_vec: x})
     test_mat = np.eye(self.dual_object.matrix_m_dimension)
     test_mat[0, 0] = -10
     def _vector_prod_fn(x):
@@ -152,11 +163,13 @@ class Optimization(object):
       return self.sess.run(self.dual_object.get_psd_product(x))
     alpha, beta, Q = utils.python_lanczos(_vector_prod_fn, 0, self.dual_object.matrix_m_dimension, 5)
     max_eig_1, _, _, _ = self.eigen_tridiagonal(alpha, beta[1:len(alpha)])
-    alpha, beta, Q = utils.python_lanczos(_vector_prod_fn, max_eig_1, self.dual_object.matrix_m_dimension, self.params['lanczos_steps'])
+    # print(max_eig_1)
+    start = time.time()
+    alpha, beta, Q = utils.python_lanczos(_vector_prod_fn, max_eig_1, self.dual_object.matrix_m_dimension, 10, logging=True)
+    print("2nd iter has " + str(time.time() - start) + " sec elapsed")
     max_eig, max_vec, _, allthem = self.eigen_tridiagonal(alpha, beta[1:len(alpha)])
+    # print(max_eig)
     max_eig += max_eig_1
-    print(allthem)
-    print(max_vec.shape)
     Q = Q[:,1:-1]
     min_eig_vec = np.matmul(Q, max_vec).reshape((self.dual_object.matrix_m_dimension, 1))
     return min_eig_vec, max_eig
@@ -169,37 +182,22 @@ class Optimization(object):
     Returns:
       eig_val: Minimum absolute eigen value
       eig_vec: Corresponding eigen vector"""
-    d, e, V = self.sess.run([self.d, self.e, self.V])
-    e = e[1:]
+    alpha, beta, W = self.sess.run([self.alpha, self.beta, self.W])
         
     # Compute max eig of tridiagonal matrix
-    # eigs, eig_vecs = eigh_tridiagonal(d, e)
-    max_eig_1, _, _, _ = self.eigen_tridiagonal(d, e)
-    print(max_eig_1)
+    max_eig_1, _, _, _ = self.eigen_tridiagonal(alpha, beta[1:len(alpha)])
 
     # M_hat = M - max_eig * M. Compute max eig of resulting tridiagonal matrix
     start = time.time()
-    def _vector_prod_fn(x):
-      return self.dual_object.get_psd_product(x)
-    
-    d_hat, e_hat, V_hat = self.min_eigen_vec(_vector_prod_fn, max_eig_1, self.dual_object.matrix_m_dimension, 10)
-    d_hat, e_hat, V_hat = self.sess.run([d_hat, e_hat, V_hat])
-    e_hat = e_hat[1:]
-    print("2nd iter has " + str(time.time() - start) + " sec elapsed")
+    alpha_hat, beta_hat, W_hat = self.sess.run([self.alpha_hat, self.beta_hat, self.W_hat], feed_dict={self.eig_max_placeholder: max_eig_1})
+    W_hat = W_hat[:,1:-1]
     start = time.time()
 
-    max_eig, max_vec, _, allthem = self.eigen_tridiagonal(d_hat, e_hat)
+    max_eig, max_vec, _, allthem = self.eigen_tridiagonal(alpha_hat, beta_hat[1:len(alpha_hat)])
     max_eig += max_eig_1
-    print("2nd eigh has " + str(time.time() - start) + " sec elapsed")
-    # print(eigs_hat)
 
     # Multiply by V_hat to get the eigenvector for M
-    min_eig_vec = np.matmul(V_hat, max_vec).reshape((self.dual_object.matrix_m_dimension, 1))
-    # print("norm of min vec: " + str(np.linalg.norm(min_eig_vec)))
-    # Mx = np.matmul(self.test_mat, min_eig_vec)
-    # print("xTMx: " + str(np.matmul(min_eig_vec.T, Mx)))
-    # lx = eigs[0] * min_eig_vec
-    # print(np.linalg.norm(Mx - lx))
+    min_eig_vec = np.matmul(W_hat, max_vec).reshape((self.dual_object.matrix_m_dimension, 1))
 
     return min_eig_vec, max_eig
 
@@ -345,8 +343,7 @@ class Optimization(object):
           self.eig_vec_estimate: current_eig_vector
       })
     elif self.params['eig_type'] == 'LZS':
-      current_eig_vector, self.current_eig_val_estimate = self.get_lanczos_eig_vec_np()
-      print(self.current_eig_val_estimate)
+      current_eig_vector, self.current_eig_val_estimate = self.get_lanczos_eig_vec()
       step_feed_dict.update({
           self.eig_vec_estimate: current_eig_vector
       })
