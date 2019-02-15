@@ -143,7 +143,6 @@ def main(_):
       if not is_cert_found:
         print('Example could not be verified')
         exit()
-  print('Example successfully verified')
   print('Elapsed time: ' + str(time.time() - start_time))
 
 

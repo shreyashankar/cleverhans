@@ -8,6 +8,7 @@ import numpy as np
 import tensorflow as tf
 import time
 
+from scipy.linalg import eigh_tridiagonal
 
 def diag(diag_elements):
   """Function to create tensorflow diagonal matrix with input diagonal entries.
@@ -121,6 +122,21 @@ def python_lanczos(vector_prod_fn, scalar, n, k, logging=False):
   return alpha, beta, Q
 
 def lanczos_decomp(vector_prod_fn, scalar, n, k):
+  """Function that performs the Lanczos algorithm on a matrix.
+
+  Args:
+    vector_prod_fn: function which returns product H*x, where H is a matrix for
+      which we computing eigenvector.
+    scalar: quantity to scale the product returned by vector_prod_fn by
+    n: dimensionality of matrix H
+    k: number of iterations and dimensionality of the tridiagonal matrix to
+      return
+  
+  Returns:
+    alpha: vector of diagonal elements of T
+    beta: vector of off-diagonal elements of T
+    Q: orthonormal basis matrix for the Krylov subspace
+  """
   Q = tf.zeros([n, 1])
   v = tf.random_uniform([n, 1])
   v = v / tf.norm(v)
@@ -144,65 +160,15 @@ def lanczos_decomp(vector_prod_fn, scalar, n, k):
   alpha = tf.slice(alpha, begin=[1], size=[-1])
   return alpha, beta, Q
 
-# def lanczos_decomp(vector_prod_fn, scalar, n, k):
-#   """Function that performs the Lanczos algorithm on a matrix.
-
-#   Args:
-#     vector_prod_fn: function which returns product H*x, where H is a matrix for
-#       which we computing eigenvector.
-#     scalar: quantity to scale the product returned by vector_prod_fn by
-#     n: dimensionality of matrix H
-#     k: number of iterations and dimensionality of the tridiagonal matrix to
-#       return
-  
-#   Returns:
-#     d: vector of diagonal elements of T
-#     e: vector of off-diagonal elements of T
-#     V: orthonormal basis matrix for the Krylov subspace
-#   """
-#   # Choose random initial vector of dimentionality n
-#   v = tf.nn.l2_normalize(tf.random_uniform([n, 1]))
-
-#   # Compute first w
-#   w = vector_prod_fn(v) - scalar * v
-#   alpha = tf.matmul(tf.transpose(w), v)
-#   w -= alpha * v
-
-#   # Set T and V
-#   d = alpha
-#   e = alpha
-#   V = v
-
-#   # Compute rest of basis vectors
-#   for i in range(1, k):
-#     prev_v = v
-#     beta = tf.norm(w)
-#     if beta != 0:
-#       v = w / beta
-#     else:
-#       v = tf.nn.l2_normalize(tf.random_uniform([n, 1]))
-#     w = vector_prod_fn(v) - scalar * v
-#     alpha = tf.matmul(tf.transpose(w), v)
-#     w = w - alpha * v - beta * prev_v
-#     beta = tf.reshape(beta, [1, 1])
-
-#     # Set T and V
-#     d = tf.concat([d, alpha], axis=0)
-#     V = tf.concat([V, v], axis=1)
-#     e = tf.concat([e, beta], axis=0)
-  
-#   # Compute beta and set T
-#   beta = tf.norm(w)
-#   beta = tf.reshape(beta, [1, 1])
-#   e = tf.concat([e, beta], axis=0)
-
-#   # Squeeze dims
-#   d = tf.squeeze(d)
-#   e = tf.squeeze(e)
-
-#   e = tf.slice(e, begin=[1], size=[-1])
-
-#   return d, e, V
+def eigen_tridiagonal(alpha, beta, max=True):
+  eig_values, eig_vectors = eigh_tridiagonal(alpha, beta)
+  if max:
+    ind_eig = np.argmax(np.abs(eig_values))
+  else:
+    ind_eig = np.argmin(np.abs(eig_values))
+  eig = eig_values[ind_eig]
+  eig_vector = eig_vectors[:, ind_eig]
+  return eig, eig_vector, eig_vectors, eig_values
 
 def eig_one_step(current_vector, learning_rate, vector_prod_fn):
   """Function that performs one step of gd (variant) for min eigen value.
