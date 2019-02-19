@@ -287,6 +287,7 @@ class Optimization(object):
         not tf.gfile.IsDirectory(self.params['stats_folder'])):
       tf.gfile.MkDir(self.params['stats_folder'])
     self.current_scipy_eig_val = None
+    # TODO(shankarshreya): freeze graph here so i am not creating new ops in future iterations
 
   def run_one_step(self, eig_init_vec_val, eig_num_iter_val, smooth_val,
                    penalty_val, learning_rate_val):
@@ -326,6 +327,7 @@ class Optimization(object):
           self.eig_vec_estimate: current_eig_vector
       })
     elif self.params['eig_type'] == 'LZS':
+      # TODO(shankarshreya): check if first eigenval is negative
       current_eig_vector, self.current_eig_val_estimate = self.dual_object.get_lanczos_eig()
       step_feed_dict.update({
           self.eig_vec_estimate: current_eig_vector
