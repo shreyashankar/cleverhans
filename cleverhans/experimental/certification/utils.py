@@ -110,19 +110,19 @@ def lanczos_decomp(vector_prod_fn, scalar, n, k):
     beta: vector of off-diagonal elements of T
     Q: orthonormal basis matrix for the Krylov subspace
   """
-  Q = tf.zeros([n, 1])
-  v = tf.random_uniform([n, 1])
+  Q = tf.zeros([n, 1], dtype=tf.float32)
+  v = tf.random_normal([n, 1], dtype=tf.float32)
   v = v / tf.norm(v)
   Q = tf.concat([Q, v], axis=1)
 
   # diagonals of the tridiagonal matrix
-  beta = tf.reshape(tf.constant(0, dtype=tf.float32), [1,])
-  alpha = tf.reshape(tf.constant(0, dtype=tf.float32), [1,])
+  beta = tf.constant(0.0, dtype=tf.float32, shape=[1])
+  alpha = tf.constant(0.0, dtype=tf.float32, shape=[1])
 
   for i in range(k):
     v = vector_prod_fn(tf.reshape(Q[:, i+1], [n, 1])) - tf.scalar_mul(scalar, tf.reshape(Q[:, i+1], [n, 1]))
     v = tf.reshape(v, [n,])
-    curr_alpha = tf.reshape(tf.reduce_sum(tf.multiply(v, Q[:, i+1])), [1,])
+    curr_alpha = tf.reshape(tf.reduce_sum(v * Q[:, i+1]), [1,])
     alpha = tf.concat([alpha, curr_alpha], axis=0)
     v = v-beta[-1]*Q[:, i]-alpha[-1]*Q[:, i+1]
     curr_beta = tf.reshape(tf.norm(v), [1,])
@@ -131,9 +131,44 @@ def lanczos_decomp(vector_prod_fn, scalar, n, k):
     Q = tf.concat([Q, curr_norm], axis=1)
 
   alpha = tf.slice(alpha, begin=[1], size=[-1])
+  beta = tf.slice(beta, begin=[1], size=[k-1])
+  Q = tf.slice(Q, begin=[0, 1], size=[-1, k])
   return alpha, beta, Q
 
-def eigen_tridiagonal(alpha, beta, max=True):
+def lzs_two(vector_prod_fn, scalar, n, k):
+  beta = tf.constant(0.0, dtype=tf.float32, shape=[1])
+
+  # Create initial guesses
+  v = tf.random_normal([n, 1], dtype=tf.float32)
+  w = v / tf.norm(v)
+  w_prev = tf.zeros([n, 1], dtype=tf.float32)
+  w_ = tf.zeros([n, 1], dtype=tf.float32)
+
+  # Iteration zero is different
+  Q = w
+  w_ = vector_prod_fn(w)
+  alpha = tf.reshape(tf.reduce_sum(w * w_), [1,])
+  w_ -= alpha * w
+  w, w_prev, w_ = w_, w, w_prev
+
+  for i in range(1, k):
+    curr_beta = tf.reshape(tf.norm(w), [1,])
+    beta = tf.concat([beta, curr_beta], axis=0)
+    w = w / beta[i]
+    Q = tf.concat([Q, w], axis=1)
+    w_ = vector_prod_fn(w)
+    curr_alpha = tf.reshape(tf.reduce_sum(w * w_), [1,])
+    alpha = tf.concat([alpha, curr_alpha], axis=0)
+    w_ -= alpha[i] * w
+    w_ -= beta[i] * w_prev
+    w, w_prev, w_ = w_, w, w_prev
+
+  beta = tf.slice(beta, begin=[1], size=[-1])
+  return alpha, beta, Q
+
+
+
+def eigen_tridiagonal(alpha, beta, maximum=True):
   """Computes eigenvalues of a tridiagonal matrix.
 
   Args:
@@ -147,10 +182,10 @@ def eigen_tridiagonal(alpha, beta, max=True):
     eig_values: all eigenvalues
   """
   eig_values, eig_vectors = eigh_tridiagonal(alpha, beta)
-  if max:
+  if maximum:
     ind_eig = np.argmax(np.abs(eig_values))
   else:
-    ind_eig = np.argmin(np.abs(eig_values))
+    ind_eig = np.argmin(eig_values)
   eig = eig_values[ind_eig]
   eig_vector = eig_vectors[:, ind_eig]
   return eig, eig_vector, eig_vectors, eig_values

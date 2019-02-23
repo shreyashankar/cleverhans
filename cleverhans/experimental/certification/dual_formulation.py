@@ -5,6 +5,7 @@ from __future__ import print_function
 
 import tensorflow as tf
 import numpy as np
+import time
 
 from scipy.sparse.linalg import eigs, LinearOperator
 from scipy.sparse.linalg import lgmres
@@ -155,7 +156,7 @@ class DualFormulation(object):
     """
     # Using autograph to automatically handle
     # the control flow of minimum_eigen_vector
-    self.min_eigen_vec = autograph.to_graph(utils.lanczos_decomp)
+    self.min_eigen_vec = autograph.to_graph(utils.lzs_two)
 
     def _m_vector_prod_fn(x):
       return self.get_psd_product(x)
@@ -163,7 +164,7 @@ class DualFormulation(object):
       return self.get_h_product(x)
     
     # Construct nodes for computing eigenvalue of M
-    self.alpha_m, self.beta_m, self.Q_m = self.min_eigen_vec(_m_vector_prod_fn, 0, self.matrix_m_dimension, self.lzs_params['min_iter'])
+    self.alpha_m, self.beta_m, self.Q_m = self.min_eigen_vec(_m_vector_prod_fn, 0, self.matrix_m_dimension, self.lzs_params['max_iter'])
 
     self.eig_max_placeholder = tf.placeholder(tf.float32, shape=[])
     self.alpha_m_hat, self.beta_m_hat, self.Q_m_hat = self.min_eigen_vec(_m_vector_prod_fn, self.eig_max_placeholder, self.matrix_m_dimension, self.lzs_params['max_iter'])
@@ -344,16 +345,14 @@ class DualFormulation(object):
         axis=0)
     return self.matrix_h, self.matrix_m
 
-  def make_M_psd(self, feed_dict={}):
+  def make_M_psd(self):
     """Run binary search to find a value for nu that makes M PSD
-    
     Args:
       feed_dict: dictionary of updated lambda variables to feed into M
     Returns:
       new_nu: new value of nu
     """
     original_nu = self.sess.run(self.nu)
-    feed_dict = {}
     _, min_eig_val_m = self.get_lanczos_eig()
 
     lower_nu = original_nu
@@ -361,8 +360,8 @@ class DualFormulation(object):
     num_iter = 0
 
     # Find an upper bound on nu
-    while min_eig_val_m - 1E-3 < 0:
-      if num_iter >= 15:
+    while min_eig_val_m - TOL < 0:
+      if num_iter >= 5:
         break
       num_iter += 1
       upper_nu *= 1.1
@@ -373,57 +372,54 @@ class DualFormulation(object):
 
     # Perform binary search to find best value of nu
     while lower_nu <= upper_nu:
-      if num_iter >= 25:
+      if num_iter >= 5:
         final_nu = upper_nu
         self.sess.run(tf.assign(self.nu, final_nu))
         break
       num_iter += 1
-      mid_nu =  (lower_nu + upper_nu) / 2
+      mid_nu = (lower_nu + upper_nu) / 2
       self.sess.run(tf.assign(self.nu, mid_nu))
       _, min_eig_val_m = self.get_lanczos_eig()
-      if min_eig_val_m - 1E-3 < 0:
+      if min_eig_val_m - TOL < 0:
         lower_nu = mid_nu
       else:
         upper_nu = mid_nu
-    
-    feed_dict = {}
-    _, min_eig_val_m = self.get_lanczos_eig()
-    
-    # Reset nu variable
-    # self.sess.run(tf.assign(self.nu, original_nu))
+
+    # Add 0.05 to final nu to account for numerical instability
     return original_nu, final_nu + 0.05
 
-  def get_lanczos_eig(self, M=True, feed_dict={}):
+  def get_lanczos_eig(self, M=True):
     """Computes the min eigen value and corresponding vector of matrix M or H
     using the Lanczos algorithm.
-    
     Returns:
       min_eig_vec: Corresponding eigen vector to min eig val
       eig_val: Minimum eigen value
     """
+    start = time.time()
     alpha, beta, Q = self.alpha_m, self.beta_m, self.Q_m
     alpha_hat, beta_hat, Q_hat = self.alpha_m_hat, self.beta_m_hat, self.Q_m_hat
 
     if not M:
       alpha, beta, Q = self.alpha_h, self.beta_h, self.Q_h
       alpha_hat, beta_hat, Q_hat = self.alpha_h_hat, self.beta_h_hat, self.Q_h_hat
-    
-    alpha, beta, _ = self.sess.run([alpha, beta, Q], feed_dict=feed_dict)
-    # Compute max eig of tridiagonal matrix
-    max_eig_1, _, _, _ = utils.eigen_tridiagonal(alpha, beta[1:len(alpha)])
-    feed_dict.update({self.eig_max_placeholder: max_eig_1})
 
-    # M_hat = M - max_eig * M. Compute max eig of resulting tridiagonal matrix
-    alpha_hat, beta_hat, Q_hat = self.sess.run([alpha_hat, beta_hat, Q_hat], feed_dict=feed_dict)
-    Q_hat = Q_hat[:,1:-1]
-    max_eig, max_vec, _, _ = utils.eigen_tridiagonal(alpha_hat, beta_hat[1:len(alpha_hat)])
-    eig_val = max_eig + max_eig_1
+    alpha, beta, Q = self.sess.run([alpha, beta, Q])
+    # Compute max eig of tridiagonal matrix
+    eig_val, max_vec, _, _ = utils.eigen_tridiagonal(alpha, beta, maximum=False)
+    # feed_dict = {self.eig_max_placeholder: max_eig_1}
+
+    # # M_hat = M - max_eig * M. Compute max eig of resulting tridiagonal matrix
+    # alpha_hat, beta_hat, Q_hat = self.sess.run([alpha_hat, beta_hat, Q_hat], feed_dict=feed_dict)
+    # max_eig, max_vec, _, _ = utils.eigen_tridiagonal(alpha_hat, beta_hat)
+    # eig_val = max_eig + max_eig_1
+
+    # print("Time elapsed: " + str(time.time() - start))
 
     # Multiply by V_hat to get the eigenvector for M
     if M:
-      return np.matmul(Q_hat, max_vec).reshape((self.matrix_m_dimension, 1)), eig_val
+      return np.matmul(Q, max_vec).reshape((self.matrix_m_dimension, 1)), eig_val
 
-    return np.matmul(Q_hat, max_vec).reshape((self.matrix_m_dimension - 1, 1)), eig_val
+    return np.matmul(Q, max_vec).reshape((self.matrix_m_dimension - 1, 1)), eig_val
 
   def dump_M(self, iter):
     """Function to construct entire matrix and save to a file."""
@@ -508,15 +504,11 @@ class DualFormulation(object):
       
       print("min eig val m from scipy: " + str(min_eig_val_m_scipy))
 
-      if np.abs(min_eig_val_m_scipy - min_eig_val_m) > 0.001:
-        print('diverged')
-        self.dump_M(str(current_step) + '_diverging')
-      elif current_step % 500 == 0:
-        self.dump_M(str(current_step))
-
-      # It's likely that the approximation is off by the tolerance value,
-      # so we shift it back
-      min_eig_val_h = np.real(min_eig_val_h) - TOL
+      # if np.abs(min_eig_val_m_scipy - min_eig_val_m) > 0.001:
+      #   print('diverged')
+      #   self.dump_M(str(current_step) + '_diverging')
+      # elif current_step % 500 == 0:
+      #   self.dump_M(str(current_step))
 
       input_vector_h = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension - 1, 1))
       output_vector_h = self.get_h_product(input_vector_h)
@@ -528,15 +520,15 @@ class DualFormulation(object):
       linear_operator_h = LinearOperator((self.matrix_m_dimension - 1,
                                           self.matrix_m_dimension - 1),
                                          matvec=np_vector_prod_fn_h)
-      # Performing shift invert scipy operation when eig val estimate is available
-      min_eig_val_h, _ = eigs(linear_operator_h,
-                              k=1, which='SR', tol=TOL)
+      # # Performing shift invert scipy operation when eig val estimate is available
+      # min_eig_val_h, _ = eigs(linear_operator_h,
+      #                         k=1, which='SR', tol=TOL)
 
-      # It's likely that the approximation is off by the tolerance value,
-      # so we shift it back
-      min_eig_val_h = np.real(min_eig_val_h) - TOL
+      # # It's likely that the approximation is off by the tolerance value,
+      # # so we shift it back
+      # min_eig_val_h = np.real(min_eig_val_h) - TOL
 
-      print("min eig h from scipy: " + str(min_eig_val_h))
+      # print("min eig h from scipy: " + str(min_eig_val_h))
 
       x, _ = lgmres(linear_operator_h, vector_g)
       x = x.reshape((x.shape[0], 1))
@@ -544,10 +536,10 @@ class DualFormulation(object):
       print("nu: " + str(second_term))
       print("g^top H g: " + str(inv))
       
-      # if min_eig_val_m + 1E-2 < 0:
-      #   return False
-      # tf.logging.info('Found certificate of robustness!')
-      # return True
+      if min_eig_val_m - 1E-2 > 0 and LOWER_CERT_BOUND < computed_certificate < -1:
+        tf.logging.info('Found certificate of robustness!')
+        return True
+
     self.sess.run([tf.assign(var, val) for var, val in zip(self.lambda_lu, lambda_lu_val)])
     self.sess.run([tf.assign(var, val) for var, val in zip(self.lambda_neg, lambda_neg_val)])
     self.sess.run(tf.assign(self.nu, old_nu))
