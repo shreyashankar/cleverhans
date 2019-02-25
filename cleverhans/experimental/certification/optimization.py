@@ -207,6 +207,8 @@ class Optimization(object):
         not tf.gfile.IsDirectory(self.params['stats_folder'])):
       tf.gfile.MkDir(self.params['stats_folder'])
 
+    # tf.get_default_graph().finalize()
+
   def run_one_step(self, eig_init_vec_val, eig_num_iter_val, smooth_val,
                    penalty_val, learning_rate_val):
     """Run one step of gradient descent for optimization.
@@ -240,6 +242,7 @@ class Optimization(object):
     elif self.params['eig_type'] == 'LZS':
       # TODO(shankarshreya): check if first eigenval is negative
       current_eig_vector, self.current_eig_val_estimate = self.dual_object.get_lanczos_eig()
+      print(self.current_eig_val_estimate)
       step_feed_dict.update({
           self.eig_vec_estimate: current_eig_vector
       })

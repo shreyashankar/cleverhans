@@ -361,7 +361,7 @@ class DualFormulation(object):
 
     # Find an upper bound on nu
     while min_eig_val_m - TOL < 0:
-      if num_iter >= 5:
+      if num_iter >= 15:
         break
       num_iter += 1
       upper_nu *= 1.1
@@ -372,7 +372,7 @@ class DualFormulation(object):
 
     # Perform binary search to find best value of nu
     while lower_nu <= upper_nu:
-      if num_iter >= 5:
+      if num_iter >= 15:
         final_nu = upper_nu
         self.sess.run(tf.assign(self.nu, final_nu))
         break
@@ -413,7 +413,7 @@ class DualFormulation(object):
     # max_eig, max_vec, _, _ = utils.eigen_tridiagonal(alpha_hat, beta_hat)
     # eig_val = max_eig + max_eig_1
 
-    # print("Time elapsed: " + str(time.time() - start))
+    print("Time elapsed: " + str(time.time() - start))
 
     # Multiply by V_hat to get the eigenvector for M
     if M:
