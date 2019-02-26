@@ -15,6 +15,9 @@ from cleverhans.experimental.certification import dual_formulation
 
 UPDATE_PARAM_CONSTANT = -0.1
 
+# Tolerance value for eigenvalue computation
+TOL = 1E-5
+
 
 class Optimization(object):
   """Class that sets up and runs the optimization of dual_formulation"""
@@ -85,10 +88,11 @@ class Optimization(object):
         'lambda_neg': projected_lambda_neg,
         'lambda_lu': projected_lambda_lu,
         'lambda_quad': projected_lambda_quad,
-        'nu': projected_nu
+        'nu': projected_nu,
+        'min_eig_val_h': min_eig_h
     }
     projected_dual_object = dual_formulation.DualFormulation(
-        projected_dual_var, self.dual_object.nn_params,
+        self.sess, projected_dual_var, self.dual_object.nn_params,
         self.dual_object.test_input, self.dual_object.true_class,
         self.dual_object.adv_class, self.dual_object.input_minval,
         self.dual_object.input_maxval, self.dual_object.epsilon,
@@ -268,7 +272,11 @@ class Optimization(object):
     """
     # Project onto feasible set of dual variables
     if self.current_step != 0 and self.current_step % self.params['projection_steps'] == 0:
-      if self.dual_object.compute_certificate(self.current_step):
+      # if self.dual_object.compute_certificate(self.current_step):
+      #   return True
+      nu = self.sess.run(self.dual_object.nu)
+      _, min_eig_val_h = self.dual_object.get_lanczos_eig(M=False)
+      if self.projected_dual_object.compute_certificate(self.current_step, nu, min_eig_val_h):
         return True
 
     # Running step
@@ -286,7 +294,7 @@ class Optimization(object):
     elif self.params['eig_type'] == 'LZS':
       # TODO(shankarshreya): check if first eigenval is negative
       current_eig_vector, self.current_eig_val_estimate = self.dual_object.get_lanczos_eig()
-      print(self.current_eig_val_estimate)
+      # print(self.current_eig_val_estimate)
       step_feed_dict.update({
           self.eig_vec_estimate: current_eig_vector
       })
@@ -320,7 +328,7 @@ class Optimization(object):
           'min_eig_val_estimate':
               float(self.current_eig_val_estimate)
       }
-      tf.logging.debug('Current inner step: %d, optimization stats: %s',
+      tf.logging.info('Current inner step: %d, optimization stats: %s',
                        self.current_step, stats)
       if self.params['stats_folder'] is not None:
         stats = json.dumps(stats)

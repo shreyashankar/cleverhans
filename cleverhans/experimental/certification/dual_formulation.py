@@ -124,6 +124,7 @@ class DualFormulation(object):
     self.lambda_quad = [x for x in dual_var['lambda_quad']]
     self.lambda_lu = [x for x in dual_var['lambda_lu']]
     self.nu = dual_var['nu']
+    self.min_eig_val_h = dual_var['min_eig_val_h'] if 'min_eig_val_h' in dual_var else None
     self.vector_g = None
     self.scalar_f = None
     self.matrix_h = None
@@ -352,15 +353,14 @@ class DualFormulation(object):
         axis=0)
     return self.matrix_h, self.matrix_m
 
-  def make_M_psd(self):
+  def make_M_psd(self, original_nu, min_eig_val_h):
     """Run binary search to find a value for nu that makes M PSD
     Args:
       feed_dict: dictionary of updated lambda variables to feed into M
     Returns:
       new_nu: new value of nu
     """
-    original_nu = self.sess.run(self.nu)
-    _, min_eig_val_m = self.get_lanczos_eig()
+    _, min_eig_val_m = self.get_lanczos_eig(feed_dict={self.nu: original_nu, self.min_eig_val_h: min_eig_val_h})
 
     lower_nu = original_nu
     upper_nu = original_nu
@@ -372,30 +372,28 @@ class DualFormulation(object):
         break
       num_iter += 1
       upper_nu *= 1.1
-      self.sess.run(tf.assign(self.nu, upper_nu))
-      _, min_eig_val_m = self.get_lanczos_eig()
+      _, min_eig_val_m = self.get_lanczos_eig(feed_dict={self.nu: upper_nu, self.min_eig_val_h: min_eig_val_h})
 
     final_nu = upper_nu
 
     # Perform binary search to find best value of nu
     while lower_nu <= upper_nu:
       if num_iter >= 15:
-        final_nu = upper_nu
-        self.sess.run(tf.assign(self.nu, final_nu))
         break
       num_iter += 1
       mid_nu = (lower_nu + upper_nu) / 2
-      self.sess.run(tf.assign(self.nu, mid_nu))
-      _, min_eig_val_m = self.get_lanczos_eig()
+      _, min_eig_val_m = self.get_lanczos_eig(feed_dict={self.nu: mid_nu, self.min_eig_val_h: min_eig_val_h})
       if min_eig_val_m - TOL < 0:
         lower_nu = mid_nu
       else:
         upper_nu = mid_nu
+    
+    final_nu = upper_nu
+    _, min_eig_val_m = self.get_lanczos_eig(feed_dict={self.nu: final_nu, self.min_eig_val_h: min_eig_val_h})
 
-    # Add 0.05 to final nu to account for numerical instability
-    return original_nu, final_nu + 0.05
+    return original_nu, final_nu
 
-  def get_lanczos_eig(self, M=True):
+  def get_lanczos_eig(self, M=True, feed_dict={}):
     """Computes the min eigen value and corresponding vector of matrix M or H
     using the Lanczos algorithm.
     Returns:
@@ -410,7 +408,7 @@ class DualFormulation(object):
       alpha, beta, Q = self.alpha_h, self.beta_h, self.Q_h
       alpha_hat, beta_hat, Q_hat = self.alpha_h_hat, self.beta_h_hat, self.Q_h_hat
 
-    alpha, beta, Q = self.sess.run([alpha, beta, Q])
+    alpha, beta, Q = self.sess.run([alpha, beta, Q], feed_dict=feed_dict)
     # Compute max eig of tridiagonal matrix
     eig_val, max_vec, _, _ = utils.eigen_tridiagonal(alpha, beta, maximum=False)
     # feed_dict = {self.eig_max_placeholder: max_eig_1}
@@ -420,7 +418,7 @@ class DualFormulation(object):
     # max_eig, max_vec, _, _ = utils.eigen_tridiagonal(alpha_hat, beta_hat)
     # eig_val = max_eig + max_eig_1
 
-    print("Time elapsed: " + str(time.time() - start))
+    # print("Time elapsed: " + str(time.time() - start))
 
     # Multiply by V_hat to get the eigenvector for M
     if M:
@@ -440,57 +438,26 @@ class DualFormulation(object):
       M[:, i] = np.reshape(self.sess.run(output_vector_m, feed_dict={input_vector_m: input_vector}), (n,))
     np.save('cleverhans/experimental/certification/matrices/iter_' + str(iter), M)
 
-  def compute_certificate(self, current_step):
+  def compute_certificate(self, current_step, nu, min_eig_val_h):
     """ Function to compute the certificate based either current value
     or dual variables loaded from dual folder """
-    lambda_neg_val = self.sess.run(self.lambda_neg)
-    lambda_lu_val = self.sess.run(self.lambda_lu)
-
-    _, min_eig_val_h = self.get_lanczos_eig(M=False)
-
-    dual_feed_dict = {}
-
-    new_lambda_lu_val = [np.copy(x) for x in lambda_lu_val]
-    new_lambda_neg_val = [np.copy(x) for x in lambda_neg_val]
-
-    for i in range(self.nn_params.num_hidden_layers + 1):
-      # Making H PSD
-      new_lambda_lu_val[i] = lambda_lu_val[i] + 0.5*np.maximum(-min_eig_val_h, 0) + TOL
-      # Adjusting the value of \lambda_neg to make change in g small
-      new_lambda_neg_val[i] = lambda_neg_val[i] + np.multiply((self.lower[i] + self.upper[i]),
-                                                              (lambda_lu_val[i] -
-                                                               new_lambda_lu_val[i]))
-      new_lambda_neg_val[i] = (np.multiply(self.negative_indices[i],
-                                           new_lambda_neg_val[i]) +
-                               np.multiply(self.switch_indices[i],
-                                           np.maximum(new_lambda_neg_val[i], 0)))
-
-    # Assign new lambda
-    self.sess.run([tf.assign(var, val) for var, val in zip(self.lambda_lu, new_lambda_lu_val)])
-    self.sess.run([tf.assign(var, val) for var, val in zip(self.lambda_neg, new_lambda_neg_val)])
-    # dual_feed_dict.update(zip(self.lambda_lu, new_lambda_lu_val))
-    # dual_feed_dict.update(zip(self.lambda_neg, new_lambda_neg_val))
 
     # Make matrix M PSD
-    # TODO(shankarshreya): take out unnecessary tolerance values and test
-    scalar_f = self.sess.run(self.scalar_f)
-    vector_g = self.sess.run(self.vector_g)
-    old_nu, second_term = self.make_M_psd()
-    # second_term = self.sess.run(self.nu) + 0.05
+    old_nu, second_term = self.make_M_psd(nu, min_eig_val_h)
+    feed_dict = {self.nu: second_term, self.min_eig_val_h: min_eig_val_h}
+    scalar_f = self.sess.run(self.scalar_f, feed_dict=feed_dict)
+    vector_g = self.sess.run(self.vector_g, feed_dict=feed_dict)
 
-    computed_certificate = scalar_f + 0.5*(second_term)
-
-    # x, _ = lgmres(linear_operator_h, vector_g)
-    # x = x.reshape((x.shape[0], 1))
-    # second_term = np.matmul(np.transpose(vector_g), x) + 0.05
+    # Add 0.05 to final nu to account for numerical instability
+    computed_certificate = scalar_f + 0.5*(second_term + 0.05)
 
     tf.logging.info('Inner step: %d, current value of certificate: %f',
                       current_step, computed_certificate)
 
     # Sometimes due to either overflow or instability in inverses,
       # the returned certificate is large and negative -- keeping a check
-    if LOWER_CERT_BOUND < computed_certificate < -1 or True:
-      _, min_eig_val_m = self.get_lanczos_eig()
+    if LOWER_CERT_BOUND < computed_certificate < -1:
+      _, min_eig_val_m = self.get_lanczos_eig(feed_dict=feed_dict)
       print("MIN eig val m from lzs: " + str(min_eig_val_m))
 
       # SCIPY
@@ -500,7 +467,8 @@ class DualFormulation(object):
 
       def np_vector_prod_fn_m(np_vector):
         np_vector = np.reshape(np_vector, [-1, 1])
-        output_np_vector = self.sess.run(output_vector_m, feed_dict={input_vector_m:np_vector})
+        feed_dict.update({input_vector_m:np_vector})
+        output_np_vector = self.sess.run(output_vector_m, feed_dict=feed_dict)
         return output_np_vector
       linear_operator_m = LinearOperator((self.matrix_m_dimension,
                                           self.matrix_m_dimension),
@@ -522,20 +490,12 @@ class DualFormulation(object):
 
       def np_vector_prod_fn_h(np_vector):
         np_vector = np.reshape(np_vector, [-1, 1])
-        output_np_vector = self.sess.run(output_vector_h, feed_dict={input_vector_h:np_vector})
+        feed_dict.update({input_vector_h:np_vector})
+        output_np_vector = self.sess.run(output_vector_h, feed_dict=feed_dict)
         return output_np_vector
       linear_operator_h = LinearOperator((self.matrix_m_dimension - 1,
                                           self.matrix_m_dimension - 1),
                                          matvec=np_vector_prod_fn_h)
-      # # Performing shift invert scipy operation when eig val estimate is available
-      # min_eig_val_h, _ = eigs(linear_operator_h,
-      #                         k=1, which='SR', tol=TOL)
-
-      # # It's likely that the approximation is off by the tolerance value,
-      # # so we shift it back
-      # min_eig_val_h = np.real(min_eig_val_h) - TOL
-
-      # print("min eig h from scipy: " + str(min_eig_val_h))
 
       x, _ = lgmres(linear_operator_h, vector_g)
       x = x.reshape((x.shape[0], 1))
@@ -547,8 +507,118 @@ class DualFormulation(object):
         tf.logging.info('Found certificate of robustness!')
         return True
 
-    self.sess.run([tf.assign(var, val) for var, val in zip(self.lambda_lu, lambda_lu_val)])
-    self.sess.run([tf.assign(var, val) for var, val in zip(self.lambda_neg, lambda_neg_val)])
-    self.sess.run(tf.assign(self.nu, old_nu))
-
     return False
+
+
+  # def compute_certificate(self, current_step):
+  #   """ Function to compute the certificate based either current value
+  #   or dual variables loaded from dual folder """
+  #   lambda_neg_val = self.sess.run(self.lambda_neg)
+  #   lambda_lu_val = self.sess.run(self.lambda_lu)
+
+  #   _, min_eig_val_h = self.get_lanczos_eig(M=False)
+
+  #   dual_feed_dict = {}
+
+  #   new_lambda_lu_val = [np.copy(x) for x in lambda_lu_val]
+  #   new_lambda_neg_val = [np.copy(x) for x in lambda_neg_val]
+
+  #   for i in range(self.nn_params.num_hidden_layers + 1):
+  #     # Making H PSD
+  #     new_lambda_lu_val[i] = lambda_lu_val[i] + 0.5*np.maximum(-min_eig_val_h, 0) + TOL
+  #     # Adjusting the value of \lambda_neg to make change in g small
+  #     new_lambda_neg_val[i] = lambda_neg_val[i] + np.multiply((self.lower[i] + self.upper[i]),
+  #                                                             (lambda_lu_val[i] -
+  #                                                              new_lambda_lu_val[i]))
+  #     new_lambda_neg_val[i] = (np.multiply(self.negative_indices[i],
+  #                                          new_lambda_neg_val[i]) +
+  #                              np.multiply(self.switch_indices[i],
+  #                                          np.maximum(new_lambda_neg_val[i], 0)))
+
+  #   # Assign new lambda
+  #   self.sess.run([tf.assign(var, val) for var, val in zip(self.lambda_lu, new_lambda_lu_val)])
+  #   self.sess.run([tf.assign(var, val) for var, val in zip(self.lambda_neg, new_lambda_neg_val)])
+  #   # dual_feed_dict.update(zip(self.lambda_lu, new_lambda_lu_val))
+  #   # dual_feed_dict.update(zip(self.lambda_neg, new_lambda_neg_val))
+
+  #   # Make matrix M PSD
+  #   # TODO(shankarshreya): take out unnecessary tolerance values and test
+  #   scalar_f = self.sess.run(self.scalar_f)
+  #   vector_g = self.sess.run(self.vector_g)
+  #   old_nu, second_term = self.make_M_psd()
+  #   # second_term = self.sess.run(self.nu) + 0.05
+
+  #   computed_certificate = scalar_f + 0.5*(second_term)
+
+  #   # x, _ = lgmres(linear_operator_h, vector_g)
+  #   # x = x.reshape((x.shape[0], 1))
+  #   # second_term = np.matmul(np.transpose(vector_g), x) + 0.05
+
+  #   tf.logging.info('Inner step: %d, current value of certificate: %f',
+  #                     current_step, computed_certificate)
+
+  #   # Sometimes due to either overflow or instability in inverses,
+  #     # the returned certificate is large and negative -- keeping a check
+  #   if LOWER_CERT_BOUND < computed_certificate < -1 or True:
+  #     _, min_eig_val_m = self.get_lanczos_eig()
+  #     print("MIN eig val m from lzs: " + str(min_eig_val_m))
+
+  #     # SCIPY
+      
+  #     input_vector_m = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension, 1))
+  #     output_vector_m = self.get_psd_product(input_vector_m)
+
+  #     def np_vector_prod_fn_m(np_vector):
+  #       np_vector = np.reshape(np_vector, [-1, 1])
+  #       output_np_vector = self.sess.run(output_vector_m, feed_dict={input_vector_m:np_vector})
+  #       return output_np_vector
+  #     linear_operator_m = LinearOperator((self.matrix_m_dimension,
+  #                                         self.matrix_m_dimension),
+  #                                        matvec=np_vector_prod_fn_m)
+  #     # Performing shift invert scipy operation when eig val estimate is available
+  #     min_eig_val_m_scipy, _ = eigs(linear_operator_m,
+  #                             k=1, which='SR', tol=TOL)
+      
+  #     print("min eig val m from scipy: " + str(min_eig_val_m_scipy))
+
+  #     # if np.abs(min_eig_val_m_scipy - min_eig_val_m) > 0.001:
+  #     #   print('diverged')
+  #     #   self.dump_M(str(current_step) + '_diverging')
+  #     # elif current_step % 500 == 0:
+  #     #   self.dump_M(str(current_step))
+
+  #     input_vector_h = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension - 1, 1))
+  #     output_vector_h = self.get_h_product(input_vector_h)
+
+  #     def np_vector_prod_fn_h(np_vector):
+  #       np_vector = np.reshape(np_vector, [-1, 1])
+  #       output_np_vector = self.sess.run(output_vector_h, feed_dict={input_vector_h:np_vector})
+  #       return output_np_vector
+  #     linear_operator_h = LinearOperator((self.matrix_m_dimension - 1,
+  #                                         self.matrix_m_dimension - 1),
+  #                                        matvec=np_vector_prod_fn_h)
+  #     # # Performing shift invert scipy operation when eig val estimate is available
+  #     # min_eig_val_h, _ = eigs(linear_operator_h,
+  #     #                         k=1, which='SR', tol=TOL)
+
+  #     # # It's likely that the approximation is off by the tolerance value,
+  #     # # so we shift it back
+  #     # min_eig_val_h = np.real(min_eig_val_h) - TOL
+
+  #     # print("min eig h from scipy: " + str(min_eig_val_h))
+
+  #     x, _ = lgmres(linear_operator_h, vector_g)
+  #     x = x.reshape((x.shape[0], 1))
+  #     inv = np.matmul(np.transpose(vector_g), x) + 0.05
+  #     print("nu: " + str(second_term))
+  #     print("g^top H g: " + str(inv))
+      
+  #     if min_eig_val_m - 1E-2 > 0 and LOWER_CERT_BOUND < computed_certificate < -1:
+  #       tf.logging.info('Found certificate of robustness!')
+  #       return True
+
+  #   self.sess.run([tf.assign(var, val) for var, val in zip(self.lambda_lu, lambda_lu_val)])
+  #   self.sess.run([tf.assign(var, val) for var, val in zip(self.lambda_neg, lambda_neg_val)])
+  #   self.sess.run(tf.assign(self.nu, old_nu))
+
+  #   return False
