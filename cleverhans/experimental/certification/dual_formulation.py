@@ -442,6 +442,8 @@ class DualFormulation(object):
   def compute_certificate(self):
     """ Function to compute the certificate based either current value
     or dual variables loaded from dual folder """
+    # TODO(shankarshreya): write this in tensorflow, not python. consider
+    # using conjugate gradient TF code
     lambda_neg_val = self.sess.run(self.lambda_neg)
     lambda_lu_val = self.sess.run(self.lambda_lu)
 
@@ -483,7 +485,10 @@ class DualFormulation(object):
     original_nu = self.make_psd(feed_dict=dual_feed_dict)
     scalar_f = self.sess.run(self.scalar_f, feed_dict=dual_feed_dict)
     vector_g = self.sess.run(self.vector_g, feed_dict=dual_feed_dict)
+    # TODO(shankarshreya): take out unnecessary tolerance values and test
     second_term = self.sess.run(self.nu, feed_dict=dual_feed_dict) + 0.05
+
+    # second_term = np.matmul(g.T, lgmres(H, g))
 
     computed_certificate = scalar_f + 0.5*second_term
 
