@@ -106,6 +106,10 @@ def main(_):
     if adv_class == FLAGS.true_class:
       continue
 
+    lzs_params = {
+        'min_iter': 5,
+        'max_iter': FLAGS.lanczos_steps
+    }
     optimization_params = {
         'init_penalty': FLAGS.init_penalty,
         'large_eig_num_steps': FLAGS.large_eig_num_steps,
@@ -123,11 +127,7 @@ def main(_):
         'stats_folder': FLAGS.stats_folder,
         'projection_steps': FLAGS.projection_steps,
         'eig_type': FLAGS.eig_type,
-        'has_conv': nn_params.has_conv
-    }
-    lzs_params = {
-        'min_iter': 5,
-        'max_iter': FLAGS.lanczos_steps
+        'has_conv': nn_params.has_conv,
     }
     with tf.Session() as sess:
       dual = dual_formulation.DualFormulation(sess,

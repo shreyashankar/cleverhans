@@ -143,7 +143,7 @@ class DualFormulation(object):
     if not self.nn_params.has_conv:
       self.get_full_psd_matrix()
 
-    # Setup Lanczos functionality for compute certificate
+    # Setup functionality for compute certificate
     self.construct_lanczos_params()
 
   def construct_lanczos_params(self):
@@ -225,7 +225,7 @@ class DualFormulation(object):
     self.vector_g = tf.concat(g_rows, axis=0)
     self.unconstrained_objective = self.scalar_f + 0.5 * self.nu
 
-  def get_h_product(self, vector):
+  def get_h_product(self, vector, projected=False):
     """Function that provides matrix product interface with PSD matrix.
 
     Args:
@@ -238,6 +238,13 @@ class DualFormulation(object):
     # At first layer, h is simply diagonal
     beta = vector
     h_beta_rows = []
+
+    lambda_lu = self.lambda_lu
+    lambda_quad = self.lambda_quad
+    if projected:
+      lambda_lu = self.projected_lambda_lu
+      lambda_quad = self.projected_lambda_quad
+
     for i in range(self.nn_params.num_hidden_layers):
       # Split beta of this block into [gamma, delta]
       gamma = beta[self.dual_index[i]:self.dual_index[i + 1]]
@@ -246,36 +253,36 @@ class DualFormulation(object):
       # Expanding the product with diagonal matrices
       if i == 0:
         h_beta_rows.append(
-            tf.multiply(2 * self.lambda_lu[i], gamma) -
+            tf.multiply(2 * lambda_lu[i], gamma) -
             self.nn_params.forward_pass(
-                tf.multiply(self.lambda_quad[i + 1], delta),
+                tf.multiply(lambda_quad[i + 1], delta),
                 i,
                 is_transpose=True))
       else:
         h_beta_rows[i] = (h_beta_rows[i] +
-                          tf.multiply(self.lambda_quad[i] +
-                                      self.lambda_lu[i], gamma) -
+                          tf.multiply(lambda_quad[i] +
+                                      lambda_lu[i], gamma) -
                           self.nn_params.forward_pass(
-                              tf.multiply(self.lambda_quad[i+1], delta),
+                              tf.multiply(lambda_quad[i+1], delta),
                               i, is_transpose=True))
 
       new_row = (
-          tf.multiply(self.lambda_quad[i + 1] + self.lambda_lu[i + 1], delta) -
-          tf.multiply(self.lambda_quad[i + 1],
+          tf.multiply(lambda_quad[i + 1] + lambda_lu[i + 1], delta) -
+          tf.multiply(lambda_quad[i + 1],
                       self.nn_params.forward_pass(gamma, i)))
       h_beta_rows.append(new_row)
 
     # Last boundary case
     h_beta_rows[self.nn_params.num_hidden_layers] = (
         h_beta_rows[self.nn_params.num_hidden_layers] +
-        tf.multiply((self.lambda_quad[self.nn_params.num_hidden_layers] +
-                     self.lambda_lu[self.nn_params.num_hidden_layers]),
+        tf.multiply((lambda_quad[self.nn_params.num_hidden_layers] +
+                     lambda_lu[self.nn_params.num_hidden_layers]),
                     delta))
 
     h_beta = tf.concat(h_beta_rows, axis=0)
     return h_beta
 
-  def get_psd_product(self, vector):
+  def get_psd_product(self, vector, projected=False):
     """Function that provides matrix product interface with PSD matrix.
 
     Args:
@@ -289,7 +296,7 @@ class DualFormulation(object):
     beta = vector[1:]
     # Computing the product of matrix_h with beta part of vector
     # At first layer, h is simply diagonal
-    h_beta = self.get_h_product(beta)
+    h_beta = self.get_h_product(beta, projected)
 
     # Constructing final result using vector_g
     result = tf.concat(
