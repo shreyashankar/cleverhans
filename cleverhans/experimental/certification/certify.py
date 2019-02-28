@@ -97,6 +97,8 @@ def main(_):
     test_input = np.load(f)
   test_input = np.reshape(test_input, [np.size(test_input), 1])
 
+  tf.logging.info('Loading network time: ' + str(time.time() - start_time))
+
   if FLAGS.adv_class == -1:
     start_class = 0
     end_class = FLAGS.num_classes
@@ -133,6 +135,7 @@ def main(_):
         'max_iter': FLAGS.lanczos_steps
     }
     with tf.Session() as sess:
+      start_time = time.time()
       dual = dual_formulation.DualFormulation(sess,
                                               dual_var,
                                               nn_params,
@@ -145,7 +148,10 @@ def main(_):
                                               lzs_params)
       optimization_object = optimization.Optimization(dual, sess,
                                                       optimization_params)
+      tf.logging.info('Creating TF graph time: ' + str(time.time() - start_time))
+      start_time = time.time()
       is_cert_found = optimization_object.run_optimization()
+      tf.logging.info('Optimization runtime: ' + str(time.time() - start_time))
       if not is_cert_found:
         print('Example could not be verified')
         exit()

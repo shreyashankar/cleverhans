@@ -150,7 +150,7 @@ def eigen_tridiagonal(alpha, beta, maximum=True):
   if maximum:
     ind_eig = np.argmax(np.abs(eig_values))
   else:
-    ind_eig = np.argmin(np.abs(eig_values))
+    ind_eig = np.argmin(eig_values)
   eig = eig_values[ind_eig]
   eig_vector = eig_vectors[:, ind_eig]
   return eig, eig_vector, eig_vectors, eig_values

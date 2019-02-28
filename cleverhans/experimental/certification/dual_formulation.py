@@ -9,6 +9,9 @@ import tensorflow as tf
 from tensorflow.contrib import autograph
 import numpy as np
 
+from scipy.sparse.linalg import eigs, LinearOperator
+from scipy.sparse.linalg import lgmres
+
 from cleverhans.experimental.certification import utils
 
 flags = tf.app.flags
@@ -351,7 +354,7 @@ class DualFormulation(object):
     Returns:
       new_nu: new value of nu
     """
-    _, min_eig_val_m = self.get_lanczos_eig(feed_dict={self.nu: original_nu, self.min_eig_val_h: min_eig_val_h})
+    _, min_eig_val_m = self.get_lanczos_eig(compute_m=True, feed_dict={self.nu: original_nu, self.min_eig_val_h: min_eig_val_h})
 
     lower_nu = original_nu
     upper_nu = original_nu
@@ -359,28 +362,31 @@ class DualFormulation(object):
 
     # Find an upper bound on nu
     while min_eig_val_m - TOL < 0:
-      if num_iter >= 15:
+      if num_iter >= 5:
         break
       num_iter += 1
-      upper_nu *= 1.1
-      _, min_eig_val_m = self.get_lanczos_eig(feed_dict={self.nu: upper_nu, self.min_eig_val_h: min_eig_val_h})
+      upper_nu *= 1.3
+      _, min_eig_val_m = self.get_lanczos_eig(compute_m=True, feed_dict={self.nu: upper_nu, self.min_eig_val_h: min_eig_val_h})
 
     final_nu = upper_nu
 
     # Perform binary search to find best value of nu
     while lower_nu <= upper_nu:
-      if num_iter >= 15:
+      if num_iter >= 10:
         break
       num_iter += 1
       mid_nu = (lower_nu + upper_nu) / 2
-      _, min_eig_val_m = self.get_lanczos_eig(feed_dict={self.nu: mid_nu, self.min_eig_val_h: min_eig_val_h})
+      _, min_eig_val_m = self.get_lanczos_eig(compute_m=True, feed_dict={self.nu: mid_nu, self.min_eig_val_h: min_eig_val_h})
       if min_eig_val_m - TOL < 0:
         lower_nu = mid_nu
       else:
         upper_nu = mid_nu
     
     final_nu = upper_nu
-    _, min_eig_val_m = self.get_lanczos_eig(feed_dict={self.nu: final_nu, self.min_eig_val_h: min_eig_val_h})
+    # _, min_eig_val_m = self.get_lanczos_eig(compute_m=True, feed_dict={self.nu: final_nu, self.min_eig_val_h: min_eig_val_h})
+    # print("ori nu: " + str(original_nu))
+    # print("final nu: " + str(final_nu))
+    # print("min eig val m: " + str(min_eig_val_m))
 
     return original_nu, final_nu
 
@@ -418,6 +424,8 @@ class DualFormulation(object):
     # Make matrix M PSD
     old_nu, second_term = self.make_m_psd(nu, min_eig_val_h)
     feed_dict = {self.nu: second_term, self.min_eig_val_h: min_eig_val_h}
+    _, min_eig_val_h_proj = self.get_lanczos_eig(compute_m=False, feed_dict=feed_dict)
+    print("proj min eig val h: " + str(min_eig_val_h_proj))
     scalar_f = self.sess.run(self.scalar_f, feed_dict=feed_dict)
     vector_g = self.sess.run(self.vector_g, feed_dict=feed_dict)
 
@@ -431,6 +439,48 @@ class DualFormulation(object):
     # the returned certificate is large and negative -- keeping a check
     if LOWER_CERT_BOUND < computed_certificate < -1:
       _, min_eig_val_m = self.get_lanczos_eig(feed_dict=feed_dict)
+      # print("min eig val from lanczos: " + str(min_eig_val_m))
+
+      # input_vector_m = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension, 1))
+      # output_vector_m = self.get_psd_product(input_vector_m)
+
+      # def np_vector_prod_fn_m(np_vector):
+      #   np_vector = np.reshape(np_vector, [-1, 1])
+      #   feed_dict.update({input_vector_m:np_vector})
+      #   output_np_vector = self.sess.run(output_vector_m, feed_dict=feed_dict)
+      #   return output_np_vector
+      # linear_operator_m = LinearOperator((self.matrix_m_dimension,
+      #                                     self.matrix_m_dimension),
+      #                                    matvec=np_vector_prod_fn_m)
+      # # Performing shift invert scipy operation when eig val estimate is available
+      # min_eig_val_m_scipy, _ = eigs(linear_operator_m,
+      #                         k=1, which='SR', tol=TOL)
+      
+      # print("min eig val m from scipy: " + str(min_eig_val_m_scipy))
+
+      # # if np.abs(min_eig_val_m_scipy - min_eig_val_m) > 0.001:
+      # #   print('diverged')
+      # #   self.dump_M(str(current_step) + '_diverging')
+      # # elif current_step % 500 == 0:
+      # #   self.dump_M(str(current_step))
+
+      # input_vector_h = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension - 1, 1))
+      # output_vector_h = self.get_h_product(input_vector_h)
+
+      # def np_vector_prod_fn_h(np_vector):
+      #   np_vector = np.reshape(np_vector, [-1, 1])
+      #   feed_dict.update({input_vector_h:np_vector})
+      #   output_np_vector = self.sess.run(output_vector_h, feed_dict=feed_dict)
+      #   return output_np_vector
+      # linear_operator_h = LinearOperator((self.matrix_m_dimension - 1,
+      #                                     self.matrix_m_dimension - 1),
+      #                                    matvec=np_vector_prod_fn_h)
+
+      # x, _ = lgmres(linear_operator_h, vector_g)
+      # x = x.reshape((x.shape[0], 1))
+      # inv = np.matmul(np.transpose(vector_g), x) + 0.05
+      # print("nu: " + str(second_term))
+      # print("g^top H g: " + str(inv))
 
       if min_eig_val_m - TOL > 0:
         tf.logging.info('Found certificate of robustness!')

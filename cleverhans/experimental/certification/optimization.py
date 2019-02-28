@@ -251,6 +251,9 @@ class Optimization(object):
 
     self.proj_step = tf.group(proj_ops)
 
+    # Finalize graph so no more nodes are added
+    tf.get_default_graph().finalize()
+
     # Create folder for saving stats if the folder is not None
     if (self.params.get('stats_folder') and
         not tf.gfile.IsDirectory(self.params['stats_folder'])):
@@ -290,7 +293,7 @@ class Optimization(object):
       })
     elif self.params['eig_type'] == 'LZS':
       # TODO(shankarshreya): check if first eigenval is negative
-      current_eig_vector, self.current_eig_val_estimate = self.dual_object.get_lanczos_eig()
+      current_eig_vector, self.current_eig_val_estimate = self.dual_object.get_lanczos_eig(compute_m=True)
       step_feed_dict.update({
           self.eig_vec_estimate: current_eig_vector
       })
