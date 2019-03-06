@@ -159,7 +159,7 @@ class DualFormulation(object):
     """
     # Using autograph to automatically handle
     # the control flow of minimum_eigen_vector
-    self.min_eigen_vec = autograph.to_graph(utils.lanczos_decomp)
+    self.min_eigen_vec = autograph.to_graph(utils.lzs_three)
 
     def _m_vector_prod_fn(x):
       return self.get_psd_product(x)
@@ -167,14 +167,23 @@ class DualFormulation(object):
       return self.get_h_product(x)
 
     # Construct nodes for computing eigenvalue of M
+    b = np.random.randn(self.matrix_m_dimension, 1).astype(np.float64)
     self.alpha_m, self.beta_m, self.Q_m = self.min_eigen_vec(_m_vector_prod_fn,
                                                              self.matrix_m_dimension,
-                                                             self.lzs_params['max_iter'])
+                                                             self.lzs_params['max_iter'],
+                                                             b)
 
     # Construct nodes for computing eigenvalue of H
+    b = np.random.randn(self.matrix_m_dimension - 1, 1).astype(np.float64)
     self.alpha_h, self.beta_h, self.Q_h = self.min_eigen_vec(_h_vector_prod_fn,
                                                              self.matrix_m_dimension-1,
-                                                             self.lzs_params['max_iter'])
+                                                             self.lzs_params['max_iter'],
+                                                             b)
+    
+    # self.vector_prod_fn_m = _m_vector_prod_fn
+    # self.vector_prod_fn_h = _h_vector_prod_fn
+    # self.v_min_m = np.random.randn(self.matrix_m_dimension).astype(np.float32)
+    # self.v_min_h = np.random.randn(self.matrix_m_dimension-1).astype(np.float32)
 
   def set_differentiable_objective(self):
     """Function that constructs minimization objective from dual variables."""
@@ -410,12 +419,19 @@ class DualFormulation(object):
 
     alpha, beta, Q = self.sess.run([alpha, beta, Q], feed_dict=feed_dict)
     # Compute max eig of tridiagonal matrix
-    eig_val, eig_vec, _, _ = utils.eigen_tridiagonal(alpha, beta, maximum=False)
+    eig_val, eig_vec, _, _ = utils.eigen_tridiagonal(alpha, beta[1:], Q, maximum=False)
+
+    # if compute_m:
+    #   lambda_min, self.v_min_m = utils.lanczos_eigvec(self.vector_prod_fn_m, self.v_min_m, self.lzs_params['max_iter'], collapse_tol=1e-12)
+    #   return self.v_min_m, lambda_min
+    
+    # lambda_min, self.v_min_h = utils.lanczos_eigvec(self.vector_prod_fn_h, self.v_min_h, self.lzs_params['max_iter'], collapse_tol=1e-12)
 
     # Multiply by V_hat to get the eigenvector for M
     if compute_m:
-      return np.matmul(Q, eig_vec).reshape((self.matrix_m_dimension, 1)), eig_val
-    return np.matmul(Q, eig_vec).reshape((self.matrix_m_dimension - 1, 1)), eig_val
+      return eig_vec.reshape((self.matrix_m_dimension, 1)), eig_val
+    return eig_vec.reshape((self.matrix_m_dimension - 1, 1)), eig_val
+    # return v_min_h, lambda_min
 
   def compute_certificate(self, current_step, nu, min_eig_val_h):
     """ Function to compute the certificate based either current value
@@ -423,14 +439,16 @@ class DualFormulation(object):
 
     # Make matrix M PSD
     old_nu, second_term = self.make_m_psd(nu, min_eig_val_h)
+    print(second_term)
     feed_dict = {self.nu: second_term, self.min_eig_val_h: min_eig_val_h}
-    _, min_eig_val_h_proj = self.get_lanczos_eig(compute_m=False, feed_dict=feed_dict)
-    print("proj min eig val h: " + str(min_eig_val_h_proj))
+    # _, min_eig_val_h_proj = self.get_lanczos_eig(compute_m=False, feed_dict=feed_dict)
+    # print("proj min eig val h: " + str(min_eig_val_h_proj))
     scalar_f = self.sess.run(self.scalar_f, feed_dict=feed_dict)
     vector_g = self.sess.run(self.vector_g, feed_dict=feed_dict)
 
     # Add 0.05 to final nu to account for numerical instability
-    computed_certificate = scalar_f + 0.5*(second_term + 0.05)
+    # computed_certificate = scalar_f + 0.5*(second_term + 0.05)
+    computed_certificate = self.sess.run(self.unconstrained_objective, feed_dict=feed_dict)
 
     tf.logging.info('Inner step: %d, current value of certificate: %f',
                       current_step, computed_certificate)
@@ -439,50 +457,51 @@ class DualFormulation(object):
     # the returned certificate is large and negative -- keeping a check
     if LOWER_CERT_BOUND < computed_certificate < -1:
       _, min_eig_val_m = self.get_lanczos_eig(feed_dict=feed_dict)
-      # print("min eig val from lanczos: " + str(min_eig_val_m))
+      print("min eig val from lanczos: " + str(min_eig_val_m))
 
-      # input_vector_m = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension, 1))
-      # output_vector_m = self.get_psd_product(input_vector_m)
+      input_vector_m = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension, 1))
+      output_vector_m = self.get_psd_product(input_vector_m)
 
-      # def np_vector_prod_fn_m(np_vector):
-      #   np_vector = np.reshape(np_vector, [-1, 1])
-      #   feed_dict.update({input_vector_m:np_vector})
-      #   output_np_vector = self.sess.run(output_vector_m, feed_dict=feed_dict)
-      #   return output_np_vector
-      # linear_operator_m = LinearOperator((self.matrix_m_dimension,
-      #                                     self.matrix_m_dimension),
-      #                                    matvec=np_vector_prod_fn_m)
-      # # Performing shift invert scipy operation when eig val estimate is available
-      # min_eig_val_m_scipy, _ = eigs(linear_operator_m,
-      #                         k=1, which='SR', tol=TOL)
+      def np_vector_prod_fn_m(np_vector):
+        np_vector = np.reshape(np_vector, [-1, 1])
+        feed_dict.update({input_vector_m:np_vector})
+        output_np_vector = self.sess.run(output_vector_m, feed_dict=feed_dict)
+        return output_np_vector
+      linear_operator_m = LinearOperator((self.matrix_m_dimension,
+                                          self.matrix_m_dimension),
+                                         matvec=np_vector_prod_fn_m)
+      # Performing shift invert scipy operation when eig val estimate is available
+      min_eig_val_m_scipy, _ = eigs(linear_operator_m,
+                              k=1, which='SR', tol=TOL)
       
-      # print("min eig val m from scipy: " + str(min_eig_val_m_scipy))
+      print("min eig val m from scipy: " + str(min_eig_val_m_scipy))
 
-      # # if np.abs(min_eig_val_m_scipy - min_eig_val_m) > 0.001:
-      # #   print('diverged')
-      # #   self.dump_M(str(current_step) + '_diverging')
-      # # elif current_step % 500 == 0:
-      # #   self.dump_M(str(current_step))
+      # if np.abs(min_eig_val_m_scipy - min_eig_val_m) > 0.001:
+      #   print('diverged')
+      #   self.dump_M(str(current_step) + '_diverging')
+      # elif current_step % 500 == 0:
+      #   self.dump_M(str(current_step))
 
-      # input_vector_h = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension - 1, 1))
-      # output_vector_h = self.get_h_product(input_vector_h)
+      input_vector_h = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension - 1, 1))
+      output_vector_h = self.get_h_product(input_vector_h)
 
-      # def np_vector_prod_fn_h(np_vector):
-      #   np_vector = np.reshape(np_vector, [-1, 1])
-      #   feed_dict.update({input_vector_h:np_vector})
-      #   output_np_vector = self.sess.run(output_vector_h, feed_dict=feed_dict)
-      #   return output_np_vector
-      # linear_operator_h = LinearOperator((self.matrix_m_dimension - 1,
-      #                                     self.matrix_m_dimension - 1),
-      #                                    matvec=np_vector_prod_fn_h)
+      def np_vector_prod_fn_h(np_vector):
+        np_vector = np.reshape(np_vector, [-1, 1])
+        feed_dict.update({input_vector_h:np_vector})
+        output_np_vector = self.sess.run(output_vector_h, feed_dict=feed_dict)
+        return output_np_vector
+      linear_operator_h = LinearOperator((self.matrix_m_dimension - 1,
+                                          self.matrix_m_dimension - 1),
+                                         matvec=np_vector_prod_fn_h)
 
-      # x, _ = lgmres(linear_operator_h, vector_g)
-      # x = x.reshape((x.shape[0], 1))
-      # inv = np.matmul(np.transpose(vector_g), x) + 0.05
-      # print("nu: " + str(second_term))
-      # print("g^top H g: " + str(inv))
+      x, _ = lgmres(linear_operator_h, vector_g)
+      x = x.reshape((x.shape[0], 1))
+      inv = np.matmul(np.transpose(vector_g), x) + 0.05
+      print("nu: " + str(second_term))
+      print("g^top H g: " + str(inv))
 
       if min_eig_val_m - TOL > 0:
+        print(min_eig_val_m)
         tf.logging.info('Found certificate of robustness!')
         return True
 

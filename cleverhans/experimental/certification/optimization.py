@@ -252,7 +252,7 @@ class Optimization(object):
     self.proj_step = tf.group(proj_ops)
 
     # Finalize graph so no more nodes are added
-    tf.get_default_graph().finalize()
+    # tf.get_default_graph().finalize()
 
     # Create folder for saving stats if the folder is not None
     if (self.params.get('stats_folder') and
@@ -272,13 +272,6 @@ class Optimization(object):
     Returns:
      found_cert: True is negative certificate is found, False otherwise
     """
-    # Project onto feasible set of dual variables
-    if self.current_step != 0 and self.current_step % self.params['projection_steps'] == 0:
-      nu = self.sess.run(self.dual_object.nu)
-      _, min_eig_val_h = self.dual_object.get_lanczos_eig(compute_m=False)
-      if self.projected_dual_object.compute_certificate(self.current_step, nu, min_eig_val_h):
-        return True
-
     # Running step
     step_feed_dict = {self.eig_init_vec_placeholder: eig_init_vec_val,
                       self.eig_num_iter_placeholder: eig_num_iter_val,
@@ -292,7 +285,6 @@ class Optimization(object):
           self.eig_vec_estimate: current_eig_vector
       })
     elif self.params['eig_type'] == 'LZS':
-      # TODO(shankarshreya): check if first eigenval is negative
       current_eig_vector, self.current_eig_val_estimate = self.dual_object.get_lanczos_eig(compute_m=True)
       step_feed_dict.update({
           self.eig_vec_estimate: current_eig_vector
@@ -308,6 +300,13 @@ class Optimization(object):
         self.eig_val_estimate
     ], feed_dict=step_feed_dict)
 
+    # Project onto feasible set of dual variables
+    if self.current_step != 0 and self.current_step % self.params['projection_steps'] == 0:
+      nu = self.sess.run(self.dual_object.nu)
+      _, min_eig_val_h = self.dual_object.get_lanczos_eig(compute_m=False)
+      if self.projected_dual_object.compute_certificate(self.current_step, nu, min_eig_val_h):
+        return True
+
     if self.current_step % self.params['print_stats_steps'] == 0:
       [self.current_total_objective, self.current_unconstrained_objective,
        self.current_eig_vec_val,
@@ -318,6 +317,24 @@ class Optimization(object):
             self.eig_vec_estimate,
             self.eig_val_estimate,
             self.dual_object.nu], feed_dict=step_feed_dict)
+      
+      # SCIPY 
+      input_vector_m = tf.placeholder(tf.float32, shape=(self.dual_object.matrix_m_dimension, 1))
+      output_vector_m = self.dual_object.get_psd_product(input_vector_m)
+
+      def np_vector_prod_fn_m(np_vector):
+        np_vector = np.reshape(np_vector, [-1, 1])
+        feed_dict = {input_vector_m:np_vector}
+        output_np_vector = self.sess.run(output_vector_m, feed_dict=feed_dict)
+        return output_np_vector
+      linear_operator_m = LinearOperator((self.dual_object.matrix_m_dimension,
+                                          self.dual_object.matrix_m_dimension),
+                                         matvec=np_vector_prod_fn_m)
+      # Performing shift invert scipy operation when eig val estimate is available
+      min_eig_val_m_scipy, _ = eigs(linear_operator_m,
+                              k=1, which='SR', tol=TOL)
+      
+      print("min eig val m from scipy: " + str(min_eig_val_m_scipy))
 
       stats = {
           'total_objective':

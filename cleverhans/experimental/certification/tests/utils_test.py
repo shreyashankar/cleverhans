@@ -5,6 +5,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import os
 import time
 import numpy as np
 import tensorflow as tf
@@ -12,6 +13,8 @@ from tensorflow.contrib import autograph
 from scipy.sparse.linalg import eigs, LinearOperator
 
 from cleverhans.experimental.certification import utils
+flags = tf.app.flags
+FLAGS = flags.FLAGS
 
 TOL = 1E-2
 TEST_DIM = 50
@@ -65,6 +68,7 @@ class UtilsTest(tf.test.TestCase):
     tf.reset_default_graph()
 
   def advanced_lanczos_test(self):
+    print(FLAGS)
     k_vals = [25, 100]
     filenames = ['diverging.npy', 'regular.npy']
 
@@ -74,7 +78,7 @@ class UtilsTest(tf.test.TestCase):
       return np.matmul(matrix, x)
 
     for filename in filenames:
-      filename = './matrices/' + filename
+      filename = os.path.join(FLAGS.test_srcdir, './matrices/' + filename)
       matrix = np.load(filename).astype(np.float32)
       n = matrix.shape[0]
 
