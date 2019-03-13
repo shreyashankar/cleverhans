@@ -18,7 +18,7 @@ flags = tf.app.flags
 FLAGS = flags.FLAGS
 
 # Tolerance value for eigenvalue computation
-TOL = 1E-3
+TOL = 1E-5
 
 # Bound on lowest value of certificate to check for numerical errors
 LOWER_CERT_BOUND = -5.0
@@ -167,18 +167,20 @@ class DualFormulation(object):
       return self.get_h_product(x)
 
     # Construct nodes for computing eigenvalue of M
-    b = np.random.randn(self.matrix_m_dimension, 1).astype(np.float64)
+    self.b_m = np.random.randn(self.matrix_m_dimension, 1).astype(np.float64)
+    self.b_m_ph = tf.placeholder(tf.float64, shape=(self.matrix_m_dimension, 1))
     self.alpha_m, self.beta_m, self.Q_m = self.min_eigen_vec(_m_vector_prod_fn,
                                                              self.matrix_m_dimension,
                                                              self.lzs_params['max_iter'],
-                                                             b)
+                                                             self.b_m_ph)
 
     # Construct nodes for computing eigenvalue of H
-    b = np.random.randn(self.matrix_m_dimension - 1, 1).astype(np.float64)
+    self.b_h = np.random.randn(self.matrix_m_dimension - 1, 1).astype(np.float64)
+    self.b_h_ph = tf.placeholder(tf.float64, shape=(self.matrix_m_dimension - 1, 1))
     self.alpha_h, self.beta_h, self.Q_h = self.min_eigen_vec(_h_vector_prod_fn,
                                                              self.matrix_m_dimension-1,
                                                              self.lzs_params['max_iter'],
-                                                             b)
+                                                             self.b_h_ph)
     
     # self.vector_prod_fn_m = _m_vector_prod_fn
     # self.vector_prod_fn_h = _h_vector_prod_fn
@@ -412,10 +414,13 @@ class DualFormulation(object):
       eig_val: Minimum eigen value
     """
     start = time.time()
-    alpha, beta, Q = self.alpha_m, self.beta_m, self.Q_m
+    if compute_m:
+      alpha, beta, Q = self.alpha_m, self.beta_m, self.Q_m
+      feed_dict.update({self.b_m_ph: self.b_m})
 
     if not compute_m:
       alpha, beta, Q = self.alpha_h, self.beta_h, self.Q_h
+      feed_dict.update({self.b_h_ph: self.b_h})
 
     alpha, beta, Q = self.sess.run([alpha, beta, Q], feed_dict=feed_dict)
     # Compute max eig of tridiagonal matrix
@@ -429,17 +434,71 @@ class DualFormulation(object):
 
     # Multiply by V_hat to get the eigenvector for M
     if compute_m:
+      self.b_m = eig_vec.reshape((self.matrix_m_dimension, 1))
       return eig_vec.reshape((self.matrix_m_dimension, 1)), eig_val
+    self.b_h = eig_vec.reshape((self.matrix_m_dimension - 1, 1))
     return eig_vec.reshape((self.matrix_m_dimension - 1, 1)), eig_val
     # return v_min_h, lambda_min
+  
+  # def compute_min_eig(self, compute_m=True, nu, min_eig_val_h):
+  #   if compute_m:
+  #     input_vector_m = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension, 1))
+  #     output_vector_m = self.get_psd_product(input_vector_m)
+
+  #     def np_vector_prod_fn_m(np_vector):
+  #       np_vector = np.reshape(np_vector, [-1, 1])
+  #       feed_dict={self.nu: nu, self.min_eig_val_h: min_eig_val_h,input_vector_h:np_vector}
+  #       # feed_dict = {input_vector_h:np_vector}
+  #       output_np_vector = self.sess.run(output_vector_m, feed_dict=feed_dict)
+  #       return output_np_vector
+  #     linear_operator_h = LinearOperator((self.matrix_m_dimension,
+  #                                         self.matrix_m_dimension ),
+  #                                         matvec=np_vector_prod_fn_m)
+  #     min_eig_val_m_scipy, _ = eigs(linear_operator_m,
+  #                               k=1, which='SR', tol=TOL)
+  #     return min_eig_val_m_scipy
+  #   else:
+  #     input_vector_h = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension-1, 1))
+  #     output_vector_h = self.get_h_product(input_vector_h)
+
+  #     def np_vector_prod_fn_h(np_vector):
+  #       np_vector = np.reshape(np_vector, [-1, 1])
+  #       feed_dict={self.nu: nu, self.min_eig_val_h: min_eig_val_h,input_vector_h:np_vector}
+  #       # feed_dict = {input_vector_h:np_vector}
+  #       output_np_vector = self.sess.run(output_vector_h, feed_dict=feed_dict)
+  #       return output_np_vector
+  #     linear_operator_h = LinearOperator((self.matrix_m_dimension - 1,
+  #                                         self.matrix_m_dimension - 1),
+  #                                         matvec=np_vector_prod_fn_h)
+  #     min_eig_val_h_scipy, _ = eigs(linear_operator_h,
+  #                               k=1, which='SR', tol=TOL)
+  #     return min_eig_val_h_scipy
 
   def compute_certificate(self, current_step, nu, min_eig_val_h):
     """ Function to compute the certificate based either current value
     or dual variables loaded from dual folder """
 
+    # CHECK THAT H IS PSD
+    input_vector_h = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension-1, 1))
+    output_vector_h = self.get_h_product(input_vector_h)
+
+    def np_vector_prod_fn_h(np_vector):
+      np_vector = np.reshape(np_vector, [-1, 1])
+      feed_dict={self.nu: nu, self.min_eig_val_h: min_eig_val_h,input_vector_h:np_vector}
+      # feed_dict = {input_vector_h:np_vector}
+      output_np_vector = self.sess.run(output_vector_h, feed_dict=feed_dict)
+      return output_np_vector
+    linear_operator_h = LinearOperator((self.matrix_m_dimension - 1,
+                                        self.matrix_m_dimension - 1),
+                                        matvec=np_vector_prod_fn_h)
+    min_eig_val_h_scipy, _ = eigs(linear_operator_h,
+                              k=1, which='SR', tol=TOL)
+    print("h min eig: " + str(min_eig_val_h_scipy))
+    print("nu before modifying: " + str(nu))
+
     # Make matrix M PSD
     old_nu, second_term = self.make_m_psd(nu, min_eig_val_h)
-    print(second_term)
+    print("nu after modifying: " + str(second_term))
     feed_dict = {self.nu: second_term, self.min_eig_val_h: min_eig_val_h}
     # _, min_eig_val_h_proj = self.get_lanczos_eig(compute_m=False, feed_dict=feed_dict)
     # print("proj min eig val h: " + str(min_eig_val_h_proj))

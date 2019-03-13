@@ -14,7 +14,7 @@ from tensorflow.contrib import autograph
 from cleverhans.experimental.certification import utils
 from cleverhans.experimental.certification import dual_formulation
 
-UPDATE_PARAM_CONSTANT = -0.1
+UPDATE_PARAM_CONSTANT = 10
 
 # Tolerance value for eigenvalue computation
 TOL = 1E-5
@@ -45,7 +45,6 @@ class Optimization(object):
     self.params = optimization_params
     self.penalty_placeholder = tf.placeholder(tf.float32, shape=[])
     self.projected_dual_object = self.project_dual()
-
     # The dimensionality of matrix M is the sum of sizes of all layers + 1
     # The + 1 comes due to a row and column of M representing the linear terms
     self.eig_init_vec_placeholder = tf.placeholder(
@@ -56,6 +55,32 @@ class Optimization(object):
 
     # Create graph for optimization
     self.prepare_for_optimization()
+    self.setup_scipy_params()
+  
+  def setup_scipy_params(self):
+    input_vector_m = tf.placeholder(tf.float32, shape=(self.dual_object.matrix_m_dimension, 1))
+    output_vector_m = self.dual_object.get_psd_product(input_vector_m)
+
+    def np_vector_prod_fn_m(np_vector):
+      np_vector = np.reshape(np_vector, [-1, 1])
+      feed_dict = {input_vector_m:np_vector}
+      output_np_vector = self.sess.run(output_vector_m, feed_dict=feed_dict)
+      return output_np_vector
+    self.linear_operator_m = LinearOperator((self.dual_object.matrix_m_dimension,
+                                        self.dual_object.matrix_m_dimension),
+                                        matvec=np_vector_prod_fn_m)
+    
+    input_vector_h = tf.placeholder(tf.float32, shape=(self.dual_object.matrix_m_dimension-1, 1))
+    output_vector_h = self.dual_object.get_h_product(input_vector_h)
+
+    def np_vector_prod_fn_h(np_vector):
+      np_vector = np.reshape(np_vector, [-1, 1])
+      feed_dict = {input_vector_h:np_vector}
+      output_np_vector = self.sess.run(output_vector_h, feed_dict=feed_dict)
+      return output_np_vector
+    self.linear_operator_h = LinearOperator((self.dual_object.matrix_m_dimension - 1,
+                                        self.dual_object.matrix_m_dimension - 1),
+                                        matvec=np_vector_prod_fn_h)
 
   def project_dual(self):
     """Function to create variables for the projected dual object.
@@ -260,7 +285,7 @@ class Optimization(object):
       tf.gfile.MkDir(self.params['stats_folder'])
 
   def run_one_step(self, eig_init_vec_val, eig_num_iter_val, smooth_val,
-                   penalty_val, learning_rate_val):
+                   penalty_val, learning_rate):
     """Run one step of gradient descent for optimization.
 
     Args:
@@ -268,7 +293,6 @@ class Optimization(object):
       eig_num_iter_val: Number of iterations to run for eigen computations
       smooth_val: Value of smoothness parameter
       penalty_val: Value of penalty for the current step
-      learning_rate_val: Value of learning rate
     Returns:
      found_cert: True is negative certificate is found, False otherwise
     """
@@ -277,7 +301,7 @@ class Optimization(object):
                       self.eig_num_iter_placeholder: eig_num_iter_val,
                       self.smooth_placeholder: smooth_val,
                       self.penalty_placeholder: penalty_val,
-                      self.learning_rate: learning_rate_val}
+                      self.learning_rate: learning_rate}
 
     if self.params['eig_type'] == 'SCIPY':
       current_eig_vector, self.current_eig_val_estimate = self.get_scipy_eig_vec()
@@ -300,13 +324,6 @@ class Optimization(object):
         self.eig_val_estimate
     ], feed_dict=step_feed_dict)
 
-    # Project onto feasible set of dual variables
-    if self.current_step != 0 and self.current_step % self.params['projection_steps'] == 0:
-      nu = self.sess.run(self.dual_object.nu)
-      _, min_eig_val_h = self.dual_object.get_lanczos_eig(compute_m=False)
-      if self.projected_dual_object.compute_certificate(self.current_step, nu, min_eig_val_h):
-        return True
-
     if self.current_step % self.params['print_stats_steps'] == 0:
       [self.current_total_objective, self.current_unconstrained_objective,
        self.current_eig_vec_val,
@@ -319,22 +336,11 @@ class Optimization(object):
             self.dual_object.nu], feed_dict=step_feed_dict)
       
       # SCIPY 
-      input_vector_m = tf.placeholder(tf.float32, shape=(self.dual_object.matrix_m_dimension, 1))
-      output_vector_m = self.dual_object.get_psd_product(input_vector_m)
-
-      def np_vector_prod_fn_m(np_vector):
-        np_vector = np.reshape(np_vector, [-1, 1])
-        feed_dict = {input_vector_m:np_vector}
-        output_np_vector = self.sess.run(output_vector_m, feed_dict=feed_dict)
-        return output_np_vector
-      linear_operator_m = LinearOperator((self.dual_object.matrix_m_dimension,
-                                          self.dual_object.matrix_m_dimension),
-                                         matvec=np_vector_prod_fn_m)
       # Performing shift invert scipy operation when eig val estimate is available
-      min_eig_val_m_scipy, _ = eigs(linear_operator_m,
-                              k=1, which='SR', tol=TOL)
+      # min_eig_val_m_scipy, _ = eigs(self.linear_operator_m,
+      #                         k=1, which='SR', tol=TOL)
       
-      print("min eig val m from scipy: " + str(min_eig_val_m_scipy))
+      # print("min eig val m from scipy: " + str(min_eig_val_m_scipy))
 
       stats = {
           'total_objective':
@@ -352,6 +358,18 @@ class Optimization(object):
                                 str(self.current_step) + '.json')
         with tf.gfile.Open(filename) as file_f:
           file_f.write(stats)
+    
+    # Project onto feasible set of dual variables
+    if self.current_step != 0 and self.current_step % self.params['projection_steps'] == 0 and self.current_unconstrained_objective < 0:
+      nu = self.sess.run(self.dual_object.nu)
+      _, min_eig_val_h_lz = self.dual_object.get_lanczos_eig(compute_m=False)
+      # min_eig_val_h, _ = eigs(self.linear_operator_h,
+      #                         k=1, which='SR', tol=TOL)
+      print(min_eig_val_h_lz)
+      # print(min_eig_val_h)
+      # if self.projected_dual_object.compute_certificate(self.current_step, nu, min_eig_val_h_lz):
+      #   return True
+
     return False
 
   def run_optimization(self):
@@ -362,10 +380,10 @@ class Optimization(object):
       False otherwise
     """
     penalty_val = self.params['init_penalty']
+    learning_rate =  self.params['init_learning_rate']
     # Don't use smoothing initially - very inaccurate for large dimension
     self.smooth_on = False
     smooth_val = 0
-    learning_rate_val = self.params['init_learning_rate']
     self.current_outer_step = 1
 
 
@@ -378,21 +396,21 @@ class Optimization(object):
       # Run first step with random eig initialization and large number of steps
       found_cert = self.run_one_step(
           np.random.random(size=(1 + self.dual_object.dual_index[-1], 1)),
-          self.params['large_eig_num_steps'], smooth_val, penalty_val, learning_rate_val)
+          self.params['large_eig_num_steps'], smooth_val, penalty_val, learning_rate)
       if found_cert:
         return True
       while self.current_step < self.params['inner_num_steps']:
         self.current_step = self.current_step + 1
         found_cert = self.run_one_step(self.current_eig_vec_val,
                                        self.params['small_eig_num_steps'],
-                                       smooth_val, penalty_val,
-                                       learning_rate_val)
+                                       smooth_val, penalty_val, learning_rate)
         if found_cert:
           return -1
       # Update penalty only if it looks like current objective is optimizes
       if self.current_total_objective < UPDATE_PARAM_CONSTANT:
-        penalty_val = penalty_val * self.params['beta']
-        learning_rate_val = learning_rate_val*self.params['learning_rate_decay']
+        penalty_val *= self.params['beta']
+        learning_rate *= self.params['beta']
+        
       else:
         # To get more accurate gradient estimate
         self.params['small_eig_num_steps'] = (
