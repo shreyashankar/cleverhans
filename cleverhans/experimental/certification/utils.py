@@ -361,6 +361,42 @@ def lzs_three(vector_prod_fn, n, k, b, collapse_tol=1e-12):
 
   return alpha, beta, Q
 
+def tf_lanczos_eigval(vector_prod_fn, n, k, collapse_tol=1e-12, dtype=tf.float32):
+  alpha = tf.TensorArray(dtype, size=1, dynamic_size=True, element_shape=())  # diagonal elements
+  beta = tf.TensorArray(dtype, size=0, dynamic_size=True, element_shape=())   # off diagonal elements
+  
+  b = tf.random_normal(shape=[n,1], dtype=dtype)
+  w = b / tf.norm(b)
+  
+  # iteration 0:
+  w_ = vector_prod_fn(w)
+  cur_alpha = tf.reduce_sum(w_ * w)
+  alpha = alpha.write(0, cur_alpha)
+  w_ = w_ - tf.scalar_mul(cur_alpha, w)
+  w_prev = w
+  w = w_
+  
+  # subsequent iterations:
+  for i in tf.range(1, k):
+    cur_beta = tf.norm(w)
+    if cur_beta < collapse_tol:
+      # return early if Krylov subspace collapsed
+      break
+
+    w = w / cur_beta
+
+    w_ = vector_prod_fn(w)
+    cur_alpha = tf.reduce_sum(w_ * w)
+    
+    alpha = alpha.write(i, cur_alpha)
+    beta = beta.write(i-1, cur_beta)
+    i += 1
+    w_ = w_ - tf.scalar_mul(cur_alpha, w) - tf.scalar_mul(cur_beta, w_prev)
+    w_prev = w
+    w = w_
+    
+  return alpha.stack(), beta.stack()
+
 
 def lzs_two(vector_prod_fn, n, k, b, collapse_tol=1e-12):
   curr_beta = tf.norm(b)
