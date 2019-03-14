@@ -159,7 +159,7 @@ class DualFormulation(object):
     """
     # Using autograph to automatically handle
     # the control flow of minimum_eigen_vector
-    self.min_eigen_vec = autograph.to_graph(utils.lzs_three)
+    self.min_eigen_vec = autograph.to_graph(utils.tf_lanczos_eigval)
 
     def _m_vector_prod_fn(x):
       return self.get_psd_product(x)
@@ -167,16 +167,16 @@ class DualFormulation(object):
       return self.get_h_product(x)
 
     # Construct nodes for computing eigenvalue of M
-    self.b_m = np.random.randn(self.matrix_m_dimension, 1).astype(np.float64)
-    self.b_m_ph = tf.placeholder(tf.float64, shape=(self.matrix_m_dimension, 1))
+    self.b_m = np.random.randn(self.matrix_m_dimension, 1)
+    self.b_m_ph = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension, 1))
     self.alpha_m, self.beta_m, self.Q_m = self.min_eigen_vec(_m_vector_prod_fn,
                                                              self.matrix_m_dimension,
                                                              self.lzs_params['max_iter'],
                                                              self.b_m_ph)
 
     # Construct nodes for computing eigenvalue of H
-    self.b_h = np.random.randn(self.matrix_m_dimension - 1, 1).astype(np.float64)
-    self.b_h_ph = tf.placeholder(tf.float64, shape=(self.matrix_m_dimension - 1, 1))
+    self.b_h = np.random.randn(self.matrix_m_dimension - 1, 1)
+    self.b_h_ph = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension - 1, 1))
     self.alpha_h, self.beta_h, self.Q_h = self.min_eigen_vec(_h_vector_prod_fn,
                                                              self.matrix_m_dimension-1,
                                                              self.lzs_params['max_iter'],
@@ -437,7 +437,7 @@ class DualFormulation(object):
 
     alpha, beta, Q = self.sess.run([alpha, beta, Q], feed_dict=feed_dict)
     # Compute max eig of tridiagonal matrix
-    eig_val, eig_vec, _, _ = utils.eigen_tridiagonal(alpha, beta[1:], Q, maximum=False)
+    eig_val, eig_vec, _, _ = utils.eigen_tridiagonal(alpha, beta, Q, maximum=False)
 
     # if compute_m:
     #   lambda_min, self.v_min_m = utils.lanczos_eigvec(self.vector_prod_fn_m, self.v_min_m, self.lzs_params['max_iter'], collapse_tol=1e-12)

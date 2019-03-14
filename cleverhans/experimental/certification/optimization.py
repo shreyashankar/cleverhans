@@ -365,10 +365,10 @@ class Optimization(object):
       _, min_eig_val_h_lz = self.dual_object.get_lanczos_eig(compute_m=False)
       # min_eig_val_h, _ = eigs(self.linear_operator_h,
       #                         k=1, which='SR', tol=TOL)
-      print(min_eig_val_h_lz)
+      # print(min_eig_val_h_lz)
       # print(min_eig_val_h)
-      # if self.projected_dual_object.compute_certificate(self.current_step, nu, min_eig_val_h_lz):
-      #   return True
+      if self.projected_dual_object.compute_certificate(self.current_step, nu, min_eig_val_h_lz):
+        return True
 
     return False
 
@@ -409,7 +409,7 @@ class Optimization(object):
       # Update penalty only if it looks like current objective is optimizes
       if self.current_total_objective < UPDATE_PARAM_CONSTANT:
         penalty_val *= self.params['beta']
-        learning_rate *= self.params['beta']
+        learning_rate /= self.params['beta']
         
       else:
         # To get more accurate gradient estimate

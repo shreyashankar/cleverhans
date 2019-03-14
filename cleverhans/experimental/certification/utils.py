@@ -361,20 +361,21 @@ def lzs_three(vector_prod_fn, n, k, b, collapse_tol=1e-12):
 
   return alpha, beta, Q
 
-def tf_lanczos_eigval(vector_prod_fn, n, k, collapse_tol=1e-12, dtype=tf.float32):
+def tf_lanczos_eigval(vector_prod_fn, n, k, b, collapse_tol=1e-12, dtype=tf.float32):
   alpha = tf.TensorArray(dtype, size=1, dynamic_size=True, element_shape=())  # diagonal elements
   beta = tf.TensorArray(dtype, size=0, dynamic_size=True, element_shape=())   # off diagonal elements
-  
-  b = tf.random_normal(shape=[n,1], dtype=dtype)
+
   w = b / tf.norm(b)
+  w_prev = tf.zeros([n, 1], dtype=dtype)
   
   # iteration 0:
+  Q = tf.TensorArray(w.dtype, size=1, dynamic_size=True)
+  Q = Q.write(0, w)
   w_ = vector_prod_fn(w)
   cur_alpha = tf.reduce_sum(w_ * w)
   alpha = alpha.write(0, cur_alpha)
   w_ = w_ - tf.scalar_mul(cur_alpha, w)
-  w_prev = w
-  w = w_
+  w, w_prev, w_ = w_, w, w_prev
   
   # subsequent iterations:
   for i in tf.range(1, k):
@@ -390,12 +391,16 @@ def tf_lanczos_eigval(vector_prod_fn, n, k, collapse_tol=1e-12, dtype=tf.float32
     
     alpha = alpha.write(i, cur_alpha)
     beta = beta.write(i-1, cur_beta)
-    i += 1
+    Q = Q.write(i, w)
+    # i += 1
     w_ = w_ - tf.scalar_mul(cur_alpha, w) - tf.scalar_mul(cur_beta, w_prev)
-    w_prev = w
-    w = w_
+    w, w_prev, w_ = w_, w, w_prev
     
-  return alpha.stack(), beta.stack()
+  alpha = tf.squeeze(alpha.stack())
+  beta = tf.squeeze(beta.stack())
+  Q = tf.transpose(tf.squeeze(Q.stack()))
+
+  return alpha, beta, Q
 
 
 def lzs_two(vector_prod_fn, n, k, b, collapse_tol=1e-12):
