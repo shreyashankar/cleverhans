@@ -358,6 +358,19 @@ class DualFormulation(object):
         axis=0)
     return self.matrix_h, self.matrix_m
 
+  def dump_M(self, iter, feed_dict):
+    """Function to construct entire matrix and save to a file."""
+    n = self.matrix_m_dimension
+    M = np.zeros((n, n))
+    input_vector_m = tf.placeholder(tf.float32, shape=(n, 1))
+    output_vector_m = self.get_psd_product(input_vector_m)
+    for i in range(n):
+      input_vector = np.zeros((n, 1), dtype=np.float32)
+      input_vector[i, 0] = 1.0
+      feed_dict.update({input_vector_m: input_vector})
+      M[:, i] = np.reshape(self.sess.run(output_vector_m, feed_dict=feed_dict), (n,))
+    np.save('cleverhans/experimental/certification/matrices/iter_' + str(iter), M)
+
   def make_m_psd(self, original_nu, min_eig_val_h):
     """Run binary search to find a value for nu that makes M PSD
     Args:
@@ -479,22 +492,22 @@ class DualFormulation(object):
     or dual variables loaded from dual folder """
 
     # CHECK THAT H IS PSD
-    input_vector_h = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension-1, 1))
-    output_vector_h = self.get_h_product(input_vector_h)
+    # input_vector_h = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension-1, 1))
+    # output_vector_h = self.get_h_product(input_vector_h)
 
-    def np_vector_prod_fn_h(np_vector):
-      np_vector = np.reshape(np_vector, [-1, 1])
-      feed_dict={self.nu: nu, self.min_eig_val_h: min_eig_val_h,input_vector_h:np_vector}
-      # feed_dict = {input_vector_h:np_vector}
-      output_np_vector = self.sess.run(output_vector_h, feed_dict=feed_dict)
-      return output_np_vector
-    linear_operator_h = LinearOperator((self.matrix_m_dimension - 1,
-                                        self.matrix_m_dimension - 1),
-                                        matvec=np_vector_prod_fn_h)
-    min_eig_val_h_scipy, _ = eigs(linear_operator_h,
-                              k=1, which='SR', tol=TOL)
-    print("h min eig: " + str(min_eig_val_h_scipy))
-    print("nu before modifying: " + str(nu))
+    # def np_vector_prod_fn_h(np_vector):
+    #   np_vector = np.reshape(np_vector, [-1, 1])
+    #   feed_dict={self.nu: nu, self.min_eig_val_h: min_eig_val_h,input_vector_h:np_vector}
+    #   # feed_dict = {input_vector_h:np_vector}
+    #   output_np_vector = self.sess.run(output_vector_h, feed_dict=feed_dict)
+    #   return output_np_vector
+    # linear_operator_h = LinearOperator((self.matrix_m_dimension - 1,
+    #                                     self.matrix_m_dimension - 1),
+    #                                     matvec=np_vector_prod_fn_h)
+    # min_eig_val_h_scipy, _ = eigs(linear_operator_h,
+    #                           k=1, which='SR', tol=TOL)
+    # print("h min eig: " + str(min_eig_val_h_scipy))
+    # print("nu before modifying: " + str(nu))
 
     # Make matrix M PSD
     old_nu, second_term = self.make_m_psd(nu, min_eig_val_h)
@@ -514,32 +527,32 @@ class DualFormulation(object):
 
     # Sometimes due to either overflow or instability in inverses,
     # the returned certificate is large and negative -- keeping a check
-    if LOWER_CERT_BOUND < computed_certificate < -1:
+    if LOWER_CERT_BOUND < computed_certificate < 0:
       _, min_eig_val_m = self.get_lanczos_eig(feed_dict=feed_dict)
       print("min eig val from lanczos: " + str(min_eig_val_m))
 
-      input_vector_m = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension, 1))
-      output_vector_m = self.get_psd_product(input_vector_m)
+      # input_vector_m = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension, 1))
+      # output_vector_m = self.get_psd_product(input_vector_m)
 
-      def np_vector_prod_fn_m(np_vector):
-        np_vector = np.reshape(np_vector, [-1, 1])
-        feed_dict.update({input_vector_m:np_vector})
-        output_np_vector = self.sess.run(output_vector_m, feed_dict=feed_dict)
-        return output_np_vector
-      linear_operator_m = LinearOperator((self.matrix_m_dimension,
-                                          self.matrix_m_dimension),
-                                         matvec=np_vector_prod_fn_m)
-      # Performing shift invert scipy operation when eig val estimate is available
-      min_eig_val_m_scipy, _ = eigs(linear_operator_m,
-                              k=1, which='SR', tol=TOL)
+      # def np_vector_prod_fn_m(np_vector):
+      #   np_vector = np.reshape(np_vector, [-1, 1])
+      #   feed_dict.update({input_vector_m:np_vector})
+      #   output_np_vector = self.sess.run(output_vector_m, feed_dict=feed_dict)
+      #   return output_np_vector
+      # linear_operator_m = LinearOperator((self.matrix_m_dimension,
+      #                                     self.matrix_m_dimension),
+      #                                    matvec=np_vector_prod_fn_m)
+      # # Performing shift invert scipy operation when eig val estimate is available
+      # min_eig_val_m_scipy, _ = eigs(linear_operator_m,
+      #                         k=1, which='SR', tol=TOL)
       
-      print("min eig val m from scipy: " + str(min_eig_val_m_scipy))
+      # print("min eig val m from scipy: " + str(min_eig_val_m_scipy))
 
       # if np.abs(min_eig_val_m_scipy - min_eig_val_m) > 0.001:
       #   print('diverged')
       #   self.dump_M(str(current_step) + '_diverging')
       # elif current_step % 500 == 0:
-      #   self.dump_M(str(current_step))
+      self.dump_M(str(current_step), feed_dict)
 
       input_vector_h = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension - 1, 1))
       output_vector_h = self.get_h_product(input_vector_h)

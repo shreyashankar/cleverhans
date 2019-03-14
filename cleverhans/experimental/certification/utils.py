@@ -344,8 +344,6 @@ def lzs_three(vector_prod_fn, n, k, b, collapse_tol=1e-12):
     curr_alpha_rs = tf.reshape(curr_alpha, [1])
 
     if curr_beta < collapse_tol:
-      print(i)
-      print("HEREEEEE")
       break
     
     # Update alpha, beta, Q
