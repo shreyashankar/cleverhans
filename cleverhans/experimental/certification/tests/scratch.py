@@ -16,7 +16,7 @@ TEST_DIM = 50
 np.random.seed(0)
 
 def advanced_lanczos_test(b):
-  b = b.astype(np.float64)
+  # b = b.astype(np.float64)
   k_vals = [100, 200, 300, 400, 500]
   filenames = ['diverging.npy', 'regular.npy']
   min_eigs = [-3.5875054e-05, 0.00739005]
@@ -34,7 +34,7 @@ def advanced_lanczos_test(b):
       return np.matmul(matrix, x)
 
     # Create lanczos graph nodes
-    min_eigen_fn = autograph.to_graph(utils.lzs_three)
+    min_eigen_fn = autograph.to_graph(utils.tf_lanczos_eigval)
     # min_eigen_fn = utils.lzs_two
 
     # Compare against scipy
@@ -57,7 +57,7 @@ def advanced_lanczos_test(b):
 
         lzs_time = time.time() - start
         start = time.time()
-        min_eig_lzs, _, _, _ = utils.eigen_tridiagonal(curr_alpha_hat, curr_beta_hat[1:], Q_hat, maximum=False)
+        min_eig_lzs, _, _, _ = utils.eigen_tridiagonal(curr_alpha_hat, curr_beta_hat, Q_hat, maximum=False)
         eigh_time = time.time() - start
         # print(min_eig_lzs)
         print('%d\t\t%g\t\t%g\t\t%-10.5g' %(
@@ -66,7 +66,7 @@ def advanced_lanczos_test(b):
       tf.reset_default_graph()
 
 def advanced_lanczos_test_np(b):
-  b = b.astype(np.float64)
+  # b = b.astype(np.float64)
   k_vals = [100, 200, 300, 400, 500]
   filenames = ['diverging.npy', 'regular.npy']
   min_eigs = [-3.5875054e-05, 0.00739005]
@@ -105,5 +105,5 @@ def advanced_lanczos_test_np(b):
       # np.testing.assert_almost_equal(min_eig_lzs, min_eig_scipy, decimal=2)
 
 b = np.random.randn(2745, 1).astype(np.float32)
-advanced_lanczos_test_np(b)
+# advanced_lanczos_test_np(b)
 advanced_lanczos_test(b)

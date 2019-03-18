@@ -255,6 +255,7 @@ class DualFormulation(object):
       # Split beta of this block into [gamma, delta]
       gamma = beta[self.dual_index[i]:self.dual_index[i + 1]]
       delta = beta[self.dual_index[i + 1]:self.dual_index[i + 2]]
+      # import pdb; pdb.set_trace()
 
       # Expanding the product with diagonal matrices
       if i == 0:
@@ -271,11 +272,13 @@ class DualFormulation(object):
                           self.nn_params.forward_pass(
                               tf.multiply(self.lambda_quad[i+1], delta),
                               i, is_transpose=True))
+        # print(h_beta_rows[i].get_shape())
 
       new_row = (
           tf.multiply(self.lambda_quad[i + 1] + self.lambda_lu[i + 1], delta) -
           tf.multiply(self.lambda_quad[i + 1],
                       self.nn_params.forward_pass(gamma, i)))
+      # print(new_row.get_shape())
       h_beta_rows.append(new_row)
 
     # Last boundary case
@@ -438,6 +441,7 @@ class DualFormulation(object):
     alpha, beta, Q = self.sess.run([alpha, beta, Q], feed_dict=feed_dict)
     # Compute max eig of tridiagonal matrix
     eig_val, eig_vec, _, _ = utils.eigen_tridiagonal(alpha, beta, Q, maximum=False)
+    print("Lanczos time: " + str(time.time() - start))
 
     # if compute_m:
     #   lambda_min, self.v_min_m = utils.lanczos_eigvec(self.vector_prod_fn_m, self.v_min_m, self.lzs_params['max_iter'], collapse_tol=1e-12)
@@ -511,7 +515,7 @@ class DualFormulation(object):
 
     # Make matrix M PSD
     old_nu, second_term = self.make_m_psd(nu, min_eig_val_h)
-    print("nu after modifying: " + str(second_term))
+    tf.logging.info("nu after modifying: " + str(second_term))
     feed_dict = {self.nu: second_term, self.min_eig_val_h: min_eig_val_h}
     # _, min_eig_val_h_proj = self.get_lanczos_eig(compute_m=False, feed_dict=feed_dict)
     # print("proj min eig val h: " + str(min_eig_val_h_proj))
@@ -529,7 +533,7 @@ class DualFormulation(object):
     # the returned certificate is large and negative -- keeping a check
     if LOWER_CERT_BOUND < computed_certificate < 0:
       _, min_eig_val_m = self.get_lanczos_eig(feed_dict=feed_dict)
-      print("min eig val from lanczos: " + str(min_eig_val_m))
+      tf.logging.info("min eig val from lanczos: " + str(min_eig_val_m))
 
       # input_vector_m = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension, 1))
       # output_vector_m = self.get_psd_product(input_vector_m)
@@ -552,28 +556,27 @@ class DualFormulation(object):
       #   print('diverged')
       #   self.dump_M(str(current_step) + '_diverging')
       # elif current_step % 500 == 0:
-      self.dump_M(str(current_step), feed_dict)
+      # self.dump_M(str(current_step), feed_dict)
 
-      input_vector_h = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension - 1, 1))
-      output_vector_h = self.get_h_product(input_vector_h)
+      # input_vector_h = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension - 1, 1))
+      # output_vector_h = self.get_h_product(input_vector_h)
 
-      def np_vector_prod_fn_h(np_vector):
-        np_vector = np.reshape(np_vector, [-1, 1])
-        feed_dict.update({input_vector_h:np_vector})
-        output_np_vector = self.sess.run(output_vector_h, feed_dict=feed_dict)
-        return output_np_vector
-      linear_operator_h = LinearOperator((self.matrix_m_dimension - 1,
-                                          self.matrix_m_dimension - 1),
-                                         matvec=np_vector_prod_fn_h)
+      # def np_vector_prod_fn_h(np_vector):
+      #   np_vector = np.reshape(np_vector, [-1, 1])
+      #   feed_dict.update({input_vector_h:np_vector})
+      #   output_np_vector = self.sess.run(output_vector_h, feed_dict=feed_dict)
+      #   return output_np_vector
+      # linear_operator_h = LinearOperator((self.matrix_m_dimension - 1,
+      #                                     self.matrix_m_dimension - 1),
+      #                                    matvec=np_vector_prod_fn_h)
 
-      x, _ = lgmres(linear_operator_h, vector_g)
-      x = x.reshape((x.shape[0], 1))
-      inv = np.matmul(np.transpose(vector_g), x) + 0.05
-      print("nu: " + str(second_term))
-      print("g^top H g: " + str(inv))
+      # x, _ = lgmres(linear_operator_h, vector_g)
+      # x = x.reshape((x.shape[0], 1))
+      # inv = np.matmul(np.transpose(vector_g), x) + 0.05
+      tf.logging.info("nu: " + str(second_term))
+      # print("g^top H g: " + str(inv))
 
       if min_eig_val_m - TOL > 0:
-        print(min_eig_val_m)
         tf.logging.info('Found certificate of robustness!')
         return True
 
