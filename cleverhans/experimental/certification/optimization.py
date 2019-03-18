@@ -213,6 +213,8 @@ class Optimization(object):
     """Create tensorflow op for running one step of descent."""
     if self.params['eig_type'] == 'TF':
       self.eig_vec_estimate = self.get_min_eig_vec_proxy()
+    elif self.params['eig_type'] == 'LZS':
+      self.eig_vec_estimate = self.dual_object.m_min_vec
     else:
       self.eig_vec_estimate = tf.placeholder(tf.float32, shape=(self.dual_object.matrix_m_dimension, 1))
     self.stopped_eig_vec_estimate = tf.stop_gradient(self.eig_vec_estimate)
@@ -274,7 +276,8 @@ class Optimization(object):
       proj_ops.append(self.dual_object.lambda_lu[i].assign(
           tf.nn.relu(self.dual_object.lambda_lu[i])))
 
-    self.proj_step = tf.group(proj_ops)
+    with tf.control_dependencies([self.train_step]):
+      self.proj_step = tf.group(proj_ops)
 
     # Finalize graph so no more nodes are added
     # tf.get_default_graph().finalize()
@@ -308,16 +311,16 @@ class Optimization(object):
       step_feed_dict.update({
           self.eig_vec_estimate: current_eig_vector
       })
-    elif self.params['eig_type'] == 'LZS':
-      current_eig_vector, self.current_eig_val_estimate = self.dual_object.get_lanczos_eig(compute_m=True)
-      step_feed_dict.update({
-          self.eig_vec_estimate: current_eig_vector
-      })
+    # elif self.params['eig_type'] == 'LZS':
+    #   current_eig_vector, self.current_eig_val_estimate = self.dual_object.get_lanczos_eig(compute_m=True)
+    #   step_feed_dict.update({
+    #       self.eig_vec_estimate: current_eig_vector
+    #   })
 
-    self.sess.run(self.train_step, feed_dict=step_feed_dict)
+    # self.sess.run(self.train_step, feed_dict=step_feed_dict)
 
     [
-        _, self.current_eig_vec_val, self.current_eig_val_estimate
+        _, _, self.current_eig_vec_val, self.current_eig_val_estimate
     ] = self.sess.run([
         self.proj_step,
         self.eig_vec_estimate,
