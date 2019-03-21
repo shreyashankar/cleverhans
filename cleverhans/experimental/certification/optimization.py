@@ -347,7 +347,7 @@ class Optimization(object):
       if np.random.rand() < 0.1:
         print("min eig val m from scipy: " + str(min_eig_val_m_scipy))
 
-      if self.params['dual_save_dir']:
+      if 'dual_save_dir' in self.params:
         self.dual_object.save_dual(self.params['dual_save_dir'])
 
       stats = {
