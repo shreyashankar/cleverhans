@@ -157,6 +157,25 @@ class NeuralNetwork(object):
     if is_transpose:
       return tf.reshape(return_vector, (self.sizes[layer_index], 1))
     return tf.reshape(return_vector, (self.sizes[layer_index + 1], 1))
+  
+  def nn_output(self, test_input, true_class, adv_class):
+    """ Function to print the output of forward pass according the neural net class
+      Args:
+        test_input: Input to pass through the network
+        true_class: True class of the input 
+        adv_class: Adversarial class to be considered
+    """
+    activation = test_input
+    # Assumes that all the layers are relu: has to be modified for other architectures
+    for i in range(self.num_hidden_layers):
+      activation = tf.nn.relu(self.forward_pass(activation, i) + self.biases[i])
+    # Final layer                                                                                                                                
+    activation = tf.reshape(activation, [-1, 1])
+    final_weight = self.final_weights[adv_class, :] - self.final_weights[true_class, :]
+    final_weight = tf.reshape(final_weight, [-1, 1])
+    final_constant = (self.final_bias[adv_class] - self.final_bias[true_class])
+    output = tf.reduce_sum(tf.multiply(activation, final_weight)) + final_constant
+    return output
 
 def load_network_from_checkpoint(checkpoint, model_json, input_shape=None):
   """Function to read the weights from checkpoint based on json description.

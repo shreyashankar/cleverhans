@@ -4,6 +4,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import os
 import time
 import numpy as np
 import tensorflow as tf
@@ -21,8 +22,11 @@ flags.DEFINE_string('model_json', None,
                     'Path of json file with model description')
 flags.DEFINE_string('init_dual_file', None,
                     'Path of numpy file with dual variables to initialize')
+flags.DEFINE_string('dual_save_dir', None,
+                    'Directory to save dual variables to')
 flags.DEFINE_string('test_input', None,
                     'Path of numpy file with test input to certify')
+flags.DEFINE_integer('test_idx', 0, 'Index of the test example')
 flags.DEFINE_integer('true_class', 0, 'True class of the test input')
 flags.DEFINE_integer('adv_class', -1,
                      'target class of adversarial example; all classes if -1')
@@ -130,11 +134,18 @@ def main(_):
         'has_conv': nn_params.has_conv,
         'lanczos_steps': FLAGS.lanczos_steps
     }
+    if FLAGS.dual_save_dir:
+      dual_folder = os.path.join(FLAGS.dual_save_dir, str(FLAGS.test_idx) + '_' + str(adv_class))
+      optimization_params.update({'dual_save_dir': dual_folder})
     lzs_params = {
         'min_iter': MIN_LANCZOS_ITER,
         'max_iter': FLAGS.lanczos_steps
     }
     with tf.Session() as sess:
+      sess.run(tf.global_variables_initializer())
+      nn_test_output = nn_params.nn_output(test_input, FLAGS.true_class, adv_class)
+      current_test_output = sess.run(nn_test_output)
+      print(current_test_output)
       start_time = time.time()
       dual = dual_formulation.DualFormulation(sess,
                                               dual_var,

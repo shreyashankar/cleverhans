@@ -103,11 +103,11 @@ class Optimization(object):
       # Making H PSD
       projected_lambda_lu[i] = self.dual_object.lambda_lu[i] + 0.5*tf.maximum(-min_eig_h, 0) + TOL
       # Adjusting the value of \lambda_neg to make change in g small
-      projected_lambda_neg[i] = self.dual_object.lambda_neg[i] + tf.multiply((self.dual_object.lower[i] + self.dual_object.upper[i]), (self.dual_object.lambda_lu[i] - projected_lambda_lu[i]))
-      projected_lambda_neg[i] = (tf.multiply(self.dual_object.negative_indices[i],
-                                          projected_lambda_neg[i]) +
-                               tf.multiply(self.dual_object.switch_indices[i],
-                                           tf.maximum(projected_lambda_neg[i], 0)))
+      # projected_lambda_neg[i] = self.dual_object.lambda_neg[i] + tf.multiply((self.dual_object.lower[i] + self.dual_object.upper[i]), (self.dual_object.lambda_lu[i] - projected_lambda_lu[i]))
+      # projected_lambda_neg[i] = (tf.multiply(self.dual_object.negative_indices[i],
+      #                                     projected_lambda_neg[i]) +
+      #                          tf.multiply(self.dual_object.switch_indices[i],
+      #                                      tf.maximum(projected_lambda_neg[i], 0)))
     
     projected_dual_var = {
         'lambda_pos': projected_lambda_pos,
@@ -253,36 +253,36 @@ class Optimization(object):
     self.sess.run(tf.global_variables_initializer())
 
     # Projecting the dual variables
-    proj_ops = []
-    for i in range(self.dual_object.nn_params.num_hidden_layers + 1):
-      # Lambda_pos is non negative for switch indices,
-      # Unconstrained for positive indices
-      # Zero for negative indices
-      proj_ops.append(self.dual_object.lambda_pos[i].assign(
-          tf.multiply(self.dual_object.positive_indices[i],
-                      self.dual_object.lambda_pos[i])+
-          tf.multiply(self.dual_object.switch_indices[i],
-                      tf.nn.relu(self.dual_object.lambda_pos[i]))))
-      proj_ops.append(self.dual_object.lambda_neg[i].assign(
-          tf.multiply(self.dual_object.negative_indices[i],
-                      self.dual_object.lambda_neg[i])+
-          tf.multiply(self.dual_object.switch_indices[i],
-                      tf.nn.relu(self.dual_object.lambda_neg[i]))))
-      # Lambda_quad is only non zero and positive for switch
-      proj_ops.append(self.dual_object.lambda_quad[i].assign(
-          tf.multiply(self.dual_object.switch_indices[i],
-                      tf.nn.relu(self.dual_object.lambda_quad[i]))))
-      # Lambda_lu is always non negative
-      proj_ops.append(self.dual_object.lambda_lu[i].assign(
-          tf.nn.relu(self.dual_object.lambda_lu[i])))
-
     with tf.control_dependencies([self.train_step]):
+      proj_ops = []
+      for i in range(self.dual_object.nn_params.num_hidden_layers + 1):
+        # Lambda_pos is non negative for switch indices,
+        # Unconstrained for positive indices
+        # Zero for negative indices
+        proj_ops.append(self.dual_object.lambda_pos[i].assign(
+            tf.multiply(self.dual_object.positive_indices[i],
+                        self.dual_object.lambda_pos[i])+
+            tf.multiply(self.dual_object.switch_indices[i],
+                        tf.nn.relu(self.dual_object.lambda_pos[i]))))
+        proj_ops.append(self.dual_object.lambda_neg[i].assign(
+            tf.multiply(self.dual_object.negative_indices[i],
+                        self.dual_object.lambda_neg[i])+
+            tf.multiply(self.dual_object.switch_indices[i],
+                        tf.nn.relu(self.dual_object.lambda_neg[i]))))
+        # Lambda_quad is only non zero and positive for switch
+        proj_ops.append(self.dual_object.lambda_quad[i].assign(
+            tf.multiply(self.dual_object.switch_indices[i],
+                        tf.nn.relu(self.dual_object.lambda_quad[i]))))
+        # Lambda_lu is always non negative
+        proj_ops.append(self.dual_object.lambda_lu[i].assign(
+            tf.nn.relu(self.dual_object.lambda_lu[i])))
+
       self.proj_step = tf.group(proj_ops)
 
     # Finalize graph so no more nodes are added
     # tf.get_default_graph().finalize()
 
-    # Create folder for saving stats if the folder is not None
+    # Create folder for saving stats if  the folder is not None
     if (self.params.get('stats_folder') and
         not tf.gfile.IsDirectory(self.params['stats_folder'])):
       tf.gfile.MkDir(self.params['stats_folder'])
@@ -311,16 +311,19 @@ class Optimization(object):
       step_feed_dict.update({
           self.eig_vec_estimate: current_eig_vector
       })
-    # elif self.params['eig_type'] == 'LZS':
-    #   current_eig_vector, self.current_eig_val_estimate = self.dual_object.get_lanczos_eig(compute_m=True)
-    #   step_feed_dict.update({
-    #       self.eig_vec_estimate: current_eig_vector
-    #   })
+    elif self.params['eig_type'] == 'LZS':
+      step_feed_dict.update({
+        self.dual_object.m_min_vec_ph: self.dual_object.m_min_vec_estimate
+      })
+      # current_eig_vector, self.current_eig_val_estimate = self.dual_object.get_lanczos_eig(compute_m=True)
+      # step_feed_dict.update({
+      #     self.eig_vec_estimate: current_eig_vector
+      # })
 
     # self.sess.run(self.train_step, feed_dict=step_feed_dict)
 
     [
-        _, _, self.current_eig_vec_val, self.current_eig_val_estimate
+        _, self.dual_object.m_min_vec_estimate, self.current_eig_val_estimate
     ] = self.sess.run([
         self.proj_step,
         self.eig_vec_estimate,
@@ -329,7 +332,7 @@ class Optimization(object):
 
     if self.current_step % self.params['print_stats_steps'] == 0:
       [self.current_total_objective, self.current_unconstrained_objective,
-       self.current_eig_vec_val,
+       self.dual_object.m_min_vec_estimate,
        self.current_eig_val_estimate,
        self.current_nu] = self.sess.run(
            [self.total_objective,
@@ -338,12 +341,14 @@ class Optimization(object):
             self.eig_val_estimate,
             self.dual_object.nu], feed_dict=step_feed_dict)
       
-      # SCIPY 
-      # Performing shift invert scipy operation when eig val estimate is available
-      # min_eig_val_m_scipy, _ = eigs(self.linear_operator_m,
-      #                         k=1, which='SR', tol=TOL)
+      min_eig_val_m_scipy, _ = eigs(self.linear_operator_m,
+                              k=1, which='SR', tol=TOL)
       
-      # print("min eig val m from scipy: " + str(min_eig_val_m_scipy))
+      if np.random.rand() < 0.1:
+        print("min eig val m from scipy: " + str(min_eig_val_m_scipy))
+
+      if self.params['dual_save_dir']:
+        self.dual_object.save_dual(self.params['dual_save_dir'])
 
       stats = {
           'total_objective':
@@ -363,10 +368,14 @@ class Optimization(object):
           file_f.write(stats)
     
     # Project onto feasible set of dual variables
-    if self.current_step != 0 and self.current_step % self.params['projection_steps'] == 0 and self.current_unconstrained_objective < 0:
+    if self.current_step % self.params['projection_steps'] == 0 and self.current_unconstrained_objective < 0:
       nu = self.sess.run(self.dual_object.nu)
-      _, min_eig_val_h_lz = self.dual_object.get_lanczos_eig(compute_m=False)
-      if min_eig_val_h_lz > -0.001 and self.projected_dual_object.compute_certificate(self.current_step, nu, min_eig_val_h_lz):
+      feed_dict = {
+        self.dual_object.h_min_vec_ph: self.dual_object.h_min_vec_estimate,
+        self.projected_dual_object.m_min_vec_ph: self.projected_dual_object.m_min_vec_estimate
+      }
+      _, min_eig_val_h_lz = self.dual_object.get_lanczos_eig(compute_m=False, feed_dict=feed_dict)
+      if self.projected_dual_object.compute_certificate(self.current_step, nu, min_eig_val_h_lz, feed_dict):
         return True
 
     return False
@@ -387,8 +396,8 @@ class Optimization(object):
 
 
     while self.current_outer_step <= self.params['outer_num_steps']:
-      tf.logging.info('Running outer step %d with penalty %f',
-                      self.current_outer_step, penalty_val)
+      tf.logging.info('Running outer step %d with penalty %f and LR %f',
+                      self.current_outer_step, penalty_val, learning_rate)
       # Running inner loop of optimization with current_smooth_val,
       # current_penalty as smoothness parameters and penalty respectively
       self.current_step = 0
@@ -400,7 +409,7 @@ class Optimization(object):
         return True
       while self.current_step < self.params['inner_num_steps']:
         self.current_step = self.current_step + 1
-        found_cert = self.run_one_step(self.current_eig_vec_val,
+        found_cert = self.run_one_step(self.dual_object.m_min_vec_estimate,
                                        self.params['small_eig_num_steps'],
                                        smooth_val, penalty_val, learning_rate)
         if found_cert:
@@ -408,7 +417,7 @@ class Optimization(object):
       # Update penalty only if it looks like current objective is optimizes
       if self.current_total_objective < UPDATE_PARAM_CONSTANT:
         penalty_val *= self.params['beta']
-        learning_rate /= self.params['beta']
+        learning_rate *= self.params['beta']
         
       else:
         # To get more accurate gradient estimate

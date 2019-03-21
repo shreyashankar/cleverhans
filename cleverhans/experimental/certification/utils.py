@@ -5,6 +5,7 @@ from __future__ import division
 from __future__ import print_function
 
 import numpy as np
+import os
 import tensorflow as tf
 from scipy.linalg import eigh_tridiagonal
 from numpy.linalg import norm
@@ -71,34 +72,40 @@ def initialize_dual(neural_net_params_object, init_dual_file=None,
                                        dtype=tf.float32))
     nu = tf.get_variable('nu', initializer=init_nu)
   else:
-    # Loading from file
-    dual_var_init_val = np.load(init_dual_file).item()
+    # Loading from folder
+    init_lambda_pos = np.load(os.path.join(init_dual_file, 'lambda_pos.npy'))
+    init_lambda_neg = np.load(os.path.join(init_dual_file, 'lambda_neg.npy'))
+    init_lambda_quad = np.load(os.path.join(init_dual_file, 'lambda_quad.npy'))
+    init_lambda_lu = np.load(os.path.join(init_dual_file, 'lambda_lu.npy'))
+    init_nu = np.load(os.path.join(init_dual_file, 'nu.npy'))
+
     for i in range(0, neural_net_params_object.num_hidden_layers + 1):
       lambda_pos.append(
-          tf.get_variable('lambda_pos_' + str(i),
-                          initializer=dual_var_init_val['lambda_pos'][i],
-                          dtype=tf.float32))
+        tf.get_variable('lambda_pos_' + str(i),
+                        initializer=init_lambda_pos[i],
+                        dtype=tf.float32))
       lambda_neg.append(
-          tf.get_variable('lambda_neg_' + str(i),
-                          initializer=dual_var_init_val['lambda_neg'][i],
-                          dtype=tf.float32))
+        tf.get_variable('lambda_neg_' + str(i),
+                        initializer=init_lambda_neg[i],
+                        dtype=tf.float32))
       lambda_quad.append(
-          tf.get_variable('lambda_quad_' + str(i),
-                          initializer=dual_var_init_val['lambda_quad'][i],
-                          dtype=tf.float32))
+        tf.get_variable('lambda_quad_' + str(i),
+                        initializer=init_lambda_quad[i],
+                        dtype=tf.float32))
       lambda_lu.append(
-          tf.get_variable('lambda_lu_' + str(i),
-                          initializer=dual_var_init_val['lambda_lu'][i],
-                          dtype=tf.float32))
-    nu = tf.get_variable('nu', initializer=1.0*dual_var_init_val['nu'])
+        tf.get_variable('lambda_lu_' + str(i),
+                        initializer=init_lambda_lu[i],
+                        dtype=tf.float32))
+    nu = tf.get_variable('nu', initializer=init_nu)
   dual_var = {'lambda_pos': lambda_pos, 'lambda_neg': lambda_neg,
               'lambda_quad': lambda_quad, 'lambda_lu': lambda_lu, 'nu': nu}
   return dual_var
 
 def tf_lanczos_smallest_eigval(vector_prod_fn,
                                matrix_dim,
+                               b,
                                max_iter=1000,
-                               collapse_tol=1e-12,
+                               collapse_tol=1e-9,
                                dtype=tf.float32):
   """Computes smallest eigenvector and eigenvalue using Lanczos in pure TF.
   This function computes smallest eigenvector and eigenvalue of the matrix
@@ -111,6 +118,7 @@ def tf_lanczos_smallest_eigval(vector_prod_fn,
     vector_prod_fn: function which takes a vector as an input and returns
       matrix vector product.
     matrix_dim: dimentionality of the matrix.
+    b: starting vector for the algorithm
     max_iter: maximum number of iterations.
     collapse_tol: tolerance to determine collapse of the Krylov subspace
     dtype: type of data
@@ -120,25 +128,35 @@ def tf_lanczos_smallest_eigval(vector_prod_fn,
   """
 
   # alpha will store diagonal elements
-  alpha = tf.TensorArray(dtype, size=1, dynamic_size=True, element_shape=())
+  alpha = tf.TensorArray(dtype, size=1, dynamic_size=True, element_shape=(), clear_after_read = False)
   # beta will store off diagonal elements
-  beta = tf.TensorArray(dtype, size=0, dynamic_size=True, element_shape=())
+  beta = tf.TensorArray(dtype, size=0, dynamic_size=True, element_shape=(), clear_after_read = False)
   # q will store Krylov space basis
   q_vectors = tf.TensorArray(
       dtype, size=1, dynamic_size=True, element_shape=(matrix_dim, 1))
+  
+  # If start vector is all zeros, make it a random normal vector and run for 1000 iter
+  if tf.reduce_sum(b) == 0:
+    b = tf.random_normal(shape=(matrix_dim, 1), dtype=dtype)
+    max_iter = 1000
 
-  # Create random vector with Euclidean norm 1
-  b = tf.random_normal(shape=(matrix_dim, 1), dtype=dtype)
+  # Normalize the start vector
   w = b / tf.norm(b)
 
   # Iteration 0 of Lanczos
   q_vectors = q_vectors.write(0, w)
-  w_ = vector_prod_fn(w)
+  w_ = tf.cast(vector_prod_fn(tf.cast(w, tf.float32)), tf.float64)
   cur_alpha = tf.reduce_sum(w_ * w)
   alpha = alpha.write(0, cur_alpha)
   w_ = w_ - tf.scalar_mul(cur_alpha, w)
   w_prev = w
   w = w_
+  # prev_eigval = 1.0
+  # offdiag_submatrix = 1
+  # tridiag_matrix = 1
+  # eigvals = 1
+  # eigvecs = 1
+  # smallest_eigval = 1
 
   # Subsequent iterations of Lanczos
   for i in tf.range(1, max_iter):
@@ -151,7 +169,7 @@ def tf_lanczos_smallest_eigval(vector_prod_fn,
     # so division will return finite result.
     w = w / cur_beta
 
-    w_ = vector_prod_fn(w)
+    w_ = tf.cast(vector_prod_fn(tf.cast(w, tf.float32)), tf.float64)
     cur_alpha = tf.reduce_sum(w_ * w)
 
     q_vectors = q_vectors.write(i, w)
@@ -161,7 +179,22 @@ def tf_lanczos_smallest_eigval(vector_prod_fn,
     w_ = w_ - tf.scalar_mul(cur_alpha, w) - tf.scalar_mul(cur_beta, w_prev)
     w_prev = w
     w = w_
+    # offdiag_submatrix = tf.linalg.diag(beta.stack())
+    # tridiag_matrix = (tf.linalg.diag(alpha.stack())
+    #                   + tf.pad(offdiag_submatrix, [[0, 1], [1, 0]])
+    #                   + tf.pad(offdiag_submatrix, [[1, 0], [0, 1]]))
 
+    # eigvals, eigvecs = tf.linalg.eigh(tridiag_matrix)
+
+    # smallest_eigval = eigvals[0]
+
+    # if tf.abs(smallest_eigval - prev_eigval) < collapse_tol:
+    #   print("made it")
+    #   break
+    
+    # prev_eigval = smallest_eigval
+  
+  # Find min eigval and eigvec
   alpha = alpha.stack()
   beta = beta.stack()
   q_vectors = tf.reshape(q_vectors.stack(), (-1, matrix_dim))
@@ -174,12 +207,13 @@ def tf_lanczos_smallest_eigval(vector_prod_fn,
   eigvals, eigvecs = tf.linalg.eigh(tridiag_matrix)
 
   smallest_eigval = eigvals[0]
+  
   smallest_eigvec = tf.matmul(tf.reshape(eigvecs[:, 0], (1, -1)),
                               q_vectors)
   smallest_eigvec = smallest_eigvec / tf.norm(smallest_eigvec)
   smallest_eigvec = tf.reshape(smallest_eigvec, (matrix_dim, 1))
 
-  return smallest_eigval, smallest_eigvec
+  return tf.cast(smallest_eigval, tf.float32), tf.cast(smallest_eigvec, tf.float32)
 
 def eig_one_step(current_vector, learning_rate, vector_prod_fn):
   """Function that performs one step of gd (variant) for min eigen value.

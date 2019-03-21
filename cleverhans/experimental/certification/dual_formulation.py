@@ -4,6 +4,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import os
 import time
 import tensorflow as tf
 from tensorflow.contrib import autograph
@@ -21,7 +22,7 @@ FLAGS = flags.FLAGS
 TOL = 1E-5
 
 # Bound on lowest value of certificate to check for numerical errors
-LOWER_CERT_BOUND = -5.0
+LOWER_CERT_BOUND = -30.0
 DEFAULT_LZS_PARAMS = {'min_iter': 5, 'max_iter': 50}
 
 
@@ -161,21 +162,30 @@ class DualFormulation(object):
     # the control flow of minimum_eigen_vector
     self.min_eigen_vec = autograph.to_graph(utils.tf_lanczos_smallest_eigval)
 
-    @autograph.do_not_convert()
+    # @autograph.do_not_convert()
     def _m_vector_prod_fn(x):
       return self.get_psd_product(x)
 
-    @autograph.do_not_convert()
+    # @autograph.do_not_convert()
     def _h_vector_prod_fn(x):
       return self.get_h_product(x)
 
     # Construct nodes for computing eigenvalue of M
+    # Create random vector with Euclidean norm 1
+    self.m_min_vec_estimate = np.zeros(shape=(self.matrix_m_dimension, 1), dtype=np.float64)
+    self.m_min_vec_ph = tf.placeholder(shape=(self.matrix_m_dimension, 1), dtype=tf.float64, name="m_min_vec_ph")
     self.m_min_eig, self.m_min_vec = self.min_eigen_vec(_m_vector_prod_fn,
                                                       self.matrix_m_dimension,
-                                                      self.lzs_params['max_iter'])
+                                                      self.m_min_vec_ph,
+                                                      self.lzs_params['max_iter'],
+                                                      dtype=tf.float64)
+    self.h_min_vec_estimate = np.zeros(shape=(self.matrix_m_dimension - 1, 1), dtype=np.float64)
+    self.h_min_vec_ph = tf.placeholder(shape=(self.matrix_m_dimension - 1, 1), dtype=tf.float64, name="h_min_vec_ph")
     self.h_min_eig, self.h_min_vec = self.min_eigen_vec(_h_vector_prod_fn,
                                                       self.matrix_m_dimension-1,
-                                                      self.lzs_params['max_iter'])
+                                                      self.h_min_vec_ph,
+                                                      self.lzs_params['max_iter'],
+                                                      dtype=tf.float64)
 
   def set_differentiable_objective(self):
     """Function that constructs minimization objective from dual variables."""
@@ -364,14 +374,18 @@ class DualFormulation(object):
       M[:, i] = np.reshape(self.sess.run(output_vector_m, feed_dict=feed_dict), (n,))
     np.save('cleverhans/experimental/certification/matrices/iter_' + str(iter), M)
 
-  def make_m_psd(self, original_nu, min_eig_val_h):
+  def make_m_psd(self, original_nu, min_eig_val_h, feed_dict):
     """Run binary search to find a value for nu that makes M PSD
     Args:
       feed_dict: dictionary of updated lambda variables to feed into M
     Returns:
       new_nu: new value of nu
     """
-    _, min_eig_val_m = self.get_lanczos_eig(compute_m=True, feed_dict={self.nu: original_nu, self.min_eig_val_h: min_eig_val_h})
+    feed_dict.update({self.nu: original_nu, self.min_eig_val_h: min_eig_val_h})
+    _, min_eig_val_m = self.get_lanczos_eig(compute_m=True, feed_dict=feed_dict)
+    # min_eig_val_m = self.get_scipy_eig(feed_dict)
+    print("min eig scipy: " + str(self.get_scipy_eig(feed_dict)))
+    print("min eig lzs: " + str(min_eig_val_m))
 
     lower_nu = original_nu
     upper_nu = original_nu
@@ -383,8 +397,14 @@ class DualFormulation(object):
         break
       num_iter += 1
       upper_nu *= 1.3
-      _, min_eig_val_m = self.get_lanczos_eig(compute_m=True, feed_dict={self.nu: upper_nu, self.min_eig_val_h: min_eig_val_h})
+      feed_dict.update({self.nu: upper_nu})
+      _, min_eig_val_m = self.get_lanczos_eig(compute_m=True, feed_dict=feed_dict)
+      # min_eig_val_m = self.get_scipy_eig(feed_dict)
+      print(min_eig_val_m)
 
+      # print("upper nu: " + str(upper_nu))
+      # print("min eig: " + str(min_eig_val_m))
+      # print("min eig scipy: " + str(self.get_scipy_eig(feed_dict)))
     final_nu = upper_nu
 
     # Perform binary search to find best value of nu
@@ -393,7 +413,11 @@ class DualFormulation(object):
         break
       num_iter += 1
       mid_nu = (lower_nu + upper_nu) / 2
-      _, min_eig_val_m = self.get_lanczos_eig(compute_m=True, feed_dict={self.nu: mid_nu, self.min_eig_val_h: min_eig_val_h})
+      feed_dict.update({self.nu: mid_nu})
+      # print("mid_nu: " + str(mid_nu))
+      _, min_eig_val_m = self.get_lanczos_eig(compute_m=True, feed_dict=feed_dict)
+      # min_eig_val_m = self.get_scipy_eig(feed_dict)
+      print(min_eig_val_m)
       if min_eig_val_m - TOL < 0:
         lower_nu = mid_nu
       else:
@@ -406,6 +430,23 @@ class DualFormulation(object):
     # print("min eig val m: " + str(min_eig_val_m))
 
     return original_nu, final_nu
+
+  def get_scipy_eig(self, feed_dict):
+    input_vector_m = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension, 1))
+    output_vector_m = self.get_psd_product(input_vector_m)
+
+    def np_vector_prod_fn_m(np_vector):
+      np_vector = np.reshape(np_vector, [-1, 1])
+      feed_dict.update({input_vector_m:np_vector})
+      # feed_dict = {input_vector_h:np_vector}
+      output_np_vector = self.sess.run(output_vector_m, feed_dict=feed_dict)
+      return output_np_vector
+    linear_operator_m = LinearOperator((self.matrix_m_dimension,
+                                        self.matrix_m_dimension ),
+                                        matvec=np_vector_prod_fn_m)
+    min_eig_val_m_scipy, _ = eigs(linear_operator_m,
+                              k=1, which='SR', tol=TOL)
+    return min_eig_val_m_scipy
 
   def get_lanczos_eig(self, compute_m=True, feed_dict={}):
     """Computes the min eigen value and corresponding vector of matrix M or H
@@ -426,17 +467,49 @@ class DualFormulation(object):
     else:
       min_eig, min_vec = self.sess.run([self.h_min_eig, self.h_min_vec], feed_dict=feed_dict)
 
-    print("LANCZOS TIME testing: " + str(time.time() - start))
     return min_vec, min_eig
+  
+  def save_dual(self, folder):
+    """Function to save the dual variables 
+    Args:
+      folder: The folder to save the dual variables 
+      sess: current tensorflow session whose dual variables are to be saved 
+    """ 
+    if not tf.gfile.IsDirectory(folder):
+      tf.gfile.MkDir(folder)
+    [current_lambda_pos, current_lambda_neg, current_lambda_quad, 
+    current_lambda_lu, current_nu] = self.sess.run([self.lambda_pos, 
+      self.lambda_neg, self.lambda_quad, self.lambda_lu, self.nu])
+    np.save(os.path.join(folder, 'lambda_pos'), current_lambda_pos)
+    np.save(os.path.join(folder, 'lambda_neg'), current_lambda_neg)
+    np.save(os.path.join(folder, 'lambda_lu'), current_lambda_lu)
+    np.save(os.path.join(folder, 'lambda_quad'), current_lambda_quad)
+    np.save(os.path.join(folder, 'nu'), current_nu)
+    print('Saved the current dual variables in folder:', folder)
 
-  def compute_certificate(self, current_step, nu, min_eig_val_h):
+  def compute_certificate(self, current_step, nu, min_eig_val_h, feed_dict):
     """ Function to compute the certificate based either current value
     or dual variables loaded from dual folder """
 
     # Make matrix M PSD
-    _, second_term = self.make_m_psd(nu, min_eig_val_h)
+    # input_vector_h = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension-1, 1))
+    # output_vector_h = self.get_h_product(input_vector_h)
+
+    # def np_vector_prod_fn_h(np_vector):
+    #   np_vector = np.reshape(np_vector, [-1, 1])
+    #   feed_dict.update({self.nu: nu, self.min_eig_val_h: min_eig_val_h,input_vector_h:np_vector})
+    #   # feed_dict = {input_vector_h:np_vector}
+    #   output_np_vector = self.sess.run(output_vector_h, feed_dict=feed_dict)
+    #   return output_np_vector
+    # linear_operator_h = LinearOperator((self.matrix_m_dimension - 1,
+    #                                     self.matrix_m_dimension - 1),
+    #                                     matvec=np_vector_prod_fn_h)
+    # min_eig_val_h_scipy, _ = eigs(linear_operator_h,
+    #                           k=1, which='SR', tol=TOL)
+    # print("h min eig: " + str(min_eig_val_h_scipy))
+    _, second_term = self.make_m_psd(nu, min_eig_val_h, feed_dict)
     tf.logging.info("nu after modifying: " + str(second_term))
-    feed_dict = {self.nu: second_term, self.min_eig_val_h: min_eig_val_h}
+    feed_dict.update({self.nu: second_term, self.min_eig_val_h: min_eig_val_h})
 
     # Add 0.05 to final nu to account for numerical instability
     computed_certificate = self.sess.run(self.unconstrained_objective, feed_dict=feed_dict)
@@ -449,6 +522,23 @@ class DualFormulation(object):
     if LOWER_CERT_BOUND < computed_certificate < 0:
       _, min_eig_val_m = self.get_lanczos_eig(feed_dict=feed_dict)
       tf.logging.info("min eig val from lanczos: " + str(min_eig_val_m))
+      input_vector_m = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension, 1))
+      output_vector_m = self.get_psd_product(input_vector_m)
+
+      def np_vector_prod_fn_m(np_vector):
+        np_vector = np.reshape(np_vector, [-1, 1])
+        feed_dict.update({input_vector_m:np_vector})
+        output_np_vector = self.sess.run(output_vector_m, feed_dict=feed_dict)
+        return output_np_vector
+      linear_operator_m = LinearOperator((self.matrix_m_dimension,
+                                          self.matrix_m_dimension),
+                                         matvec=np_vector_prod_fn_m)
+      # Performing shift invert scipy operation when eig val estimate is available
+      min_eig_val_m_scipy, _ = eigs(linear_operator_m,
+                              k=1, which='SR', tol=TOL)
+      
+      print("min eig val m from scipy: " + str(min_eig_val_m_scipy))
+
       if min_eig_val_m - TOL > 0:
         tf.logging.info('Found certificate of robustness!')
         return True
