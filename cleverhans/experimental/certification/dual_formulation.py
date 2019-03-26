@@ -12,6 +12,7 @@ import numpy as np
 
 from scipy.sparse.linalg import eigs, LinearOperator
 from scipy.sparse.linalg import lgmres
+from scipy import optimize
 
 from cleverhans.experimental.certification import utils
 
@@ -78,33 +79,40 @@ class DualFormulation(object):
 
     # Also computing pre activation lower and upper bounds
     # to compute always-off and always-on units
-    self.pre_lower = []
-    self.pre_upper = []
+    self.lower_relu = []
+    self.upper_relu = []
 
     # Initializing at the input layer with \ell_\infty constraints
-    self.lower.append(
+    self.lower_relu.append(
         tf.maximum(self.test_input - self.epsilon, self.input_minval))
-    self.upper.append(
+    self.upper_relu.append(
         tf.minimum(self.test_input + self.epsilon, self.input_maxval))
-    self.pre_lower.append(self.lower[0])
-    self.pre_upper.append(self.upper[0])
+    self.lower.append(self.lower_relu[0])
+    self.upper.append(self.upper_relu[0])
 
     for i in range(0, self.nn_params.num_hidden_layers):
-      lo_plus_up = self.nn_params.forward_pass(self.lower[i] + self.upper[i], i)
-      lo_minus_up = self.nn_params.forward_pass(self.lower[i] - self.upper[i], i, is_abs=True)
-      up_minus_lo = self.nn_params.forward_pass(self.upper[i] - self.lower[i], i, is_abs=True)
+      lo_plus_up = self.nn_params.forward_pass(self.lower_relu[i] + self.upper_relu[i], i)
+      lo_minus_up = self.nn_params.forward_pass(self.lower_relu[i] - self.upper_relu[i], i, is_abs=True)
+      up_minus_lo = self.nn_params.forward_pass(self.upper_relu[i] - self.lower_relu[i], i, is_abs=True)
       current_lower = 0.5 * (lo_plus_up + lo_minus_up) + self.nn_params.biases[i]
       current_upper = 0.5 * (lo_plus_up + up_minus_lo) + self.nn_params.biases[i]
-      self.pre_lower.append(current_lower)
-      self.pre_upper.append(current_upper)
-      self.lower.append(tf.nn.relu(current_lower))
-      self.upper.append(tf.nn.relu(current_upper))
+      self.lower.append(current_lower)
+      self.upper.append(current_upper)
+      self.lower_relu.append(tf.nn.relu(current_lower))
+      self.upper_relu.append(tf.nn.relu(current_upper))
 
     # Run lower and upper because they don't change
-    self.pre_lower = self.sess.run(self.pre_lower)
-    self.pre_upper = self.sess.run(self.pre_upper)
     self.lower = self.sess.run(self.lower)
     self.upper = self.sess.run(self.upper)
+    self.lower_relu = self.sess.run(self.lower_relu)
+    self.upper_relu = self.sess.run(self.upper_relu)
+
+    # Compute LP lower and upper bounds
+    # self.lower_tilde = []
+    # self.upper_tilde = []
+
+    # for i in range(0, self.nn_params.num_hidden_layers):
+    #   res = optimize.linprog(self.nn_params.forward_pass())
 
     # Using the preactivation lower and upper bounds
     # to compute the linear regions
@@ -114,18 +122,19 @@ class DualFormulation(object):
 
     for i in range(0, self.nn_params.num_hidden_layers + 1):
       # Positive index = 1 if the ReLU is always "on"
-      self.positive_indices.append(np.asarray(self.pre_lower[i] >= 0, dtype=np.float32))
+      self.positive_indices.append(np.asarray(self.lower[i] >= 0, dtype=np.float32))
       # Negative index = 1 if the ReLU is always off
-      self.negative_indices.append(np.asarray(self.pre_upper[i] <= 0, dtype=np.float32))
+      self.negative_indices.append(np.asarray(self.upper[i] <= 0, dtype=np.float32))
       # Switch index = 1 if the ReLU could be either on or off
       self.switch_indices.append(np.asarray(
-          np.multiply(self.pre_lower[i], self.pre_upper[i]) < 0, dtype=np.float32))
+          np.multiply(self.lower[i], self.upper[i]) < 0, dtype=np.float32))
 
     # Computing the optimization terms
     self.lambda_pos = [x for x in dual_var['lambda_pos']]
     self.lambda_neg = [x for x in dual_var['lambda_neg']]
     self.lambda_quad = [x for x in dual_var['lambda_quad']]
     self.lambda_lu = [x for x in dual_var['lambda_lu']]
+    # self.lambda_lp = [x for x in dual_var['lambda_lp']]
     self.nu = dual_var['nu']
     self.min_eig_val_h = dual_var['min_eig_val_h'] if 'min_eig_val_h' in dual_var else None
     self.vector_g = None
