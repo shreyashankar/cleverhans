@@ -1,4 +1,4 @@
-"""Code for running the certification problem."""
+"""Code for checking to make sure the certification bounds are correct."""
 
 from __future__ import absolute_import
 from __future__ import division
@@ -10,7 +10,6 @@ import tensorflow as tf
 
 from cleverhans.experimental.certification import dual_formulation
 from cleverhans.experimental.certification import nn
-from cleverhans.experimental.certification import optimization
 from cleverhans.experimental.certification import utils
 
 flags = tf.app.flags
@@ -108,26 +107,6 @@ def main(_):
     if adv_class == FLAGS.true_class:
       continue
 
-    optimization_params = {
-        'init_penalty': FLAGS.init_penalty,
-        'large_eig_num_steps': FLAGS.large_eig_num_steps,
-        'small_eig_num_steps': FLAGS.small_eig_num_steps,
-        'inner_num_steps': FLAGS.inner_num_steps,
-        'outer_num_steps': FLAGS.outer_num_steps,
-        'beta': FLAGS.beta,
-        'smoothness_parameter': FLAGS.smoothness_parameter,
-        'eig_learning_rate': FLAGS.eig_learning_rate,
-        'optimizer': FLAGS.optimizer,
-        'init_learning_rate': FLAGS.init_learning_rate,
-        'learning_rate_decay': FLAGS.learning_rate_decay,
-        'momentum_parameter': FLAGS.momentum_parameter,
-        'print_stats_steps': FLAGS.print_stats_steps,
-        'stats_folder': FLAGS.stats_folder,
-        'projection_steps': FLAGS.projection_steps,
-        'eig_type': FLAGS.eig_type,
-        'has_conv': nn_params.has_conv,
-        'lanczos_steps': FLAGS.lanczos_steps
-    }
     lzs_params = {
         'min_iter': MIN_LANCZOS_ITER,
         'max_iter': FLAGS.lanczos_steps
@@ -147,14 +126,27 @@ def main(_):
                                               FLAGS.input_maxval,
                                               FLAGS.epsilon,
                                               lzs_params)
-      optimization_object = optimization.Optimization(dual, sess,
-                                                      optimization_params)
-      is_cert_found = optimization_object.run_optimization()
-      if not is_cert_found:
-        print('Example could not be verified')
-        exit()
-  print('Example successfully verified')
-  print('Elapsed time: ' + str(time.time() - start_time))
+      # Construct network from Kolter Wong paper
+      inp = np.minimum(test_input + FLAGS.epsilon, FLAGS.input_maxval)
+      # inp = np.maximum(test_input - FLAGS.epsilon, FLAGS.input_minval)
+      # Input layer first
+      num_lower_err = np.sum(np.asarray(inp < dual.pre_lower[0], dtype=np.float32))
+      num_upper_err = np.sum(np.asarray(inp > dual.pre_upper[0], dtype=np.float32))
+      print("Num pre lower error for idx " + str(0) + ": " + str(num_lower_err))
+      print("Num pre upper error for idx " + str(0) + ": " + str(num_upper_err))
+      
+      for i in range(nn_params.num_hidden_layers):
+        output = sess.run(nn_params.forward_pass(inp, i) + nn_params.biases[i])
+        num_lower_err = np.sum(np.asarray(output < dual.pre_lower[i+1] - 1e-5, dtype=np.float32))
+        num_upper_err = np.sum(np.asarray(output > dual.pre_upper[i+1] + 1e-5, dtype=np.float32))
+        print("Num pre lower error for idx " + str(i+1) + ": " + str(num_lower_err))
+        print("Num pre upper error for idx " + str(i+1) + ": " + str(num_upper_err))
+        output = np.maximum(output, 0.0)
+        num_lower_err = np.sum(np.asarray(output < dual.lower[i+1] - 1e-5, dtype=np.float32))
+        num_upper_err = np.sum(np.asarray(output > dual.upper[i+1] + 1e-5, dtype=np.float32))
+        print("Num lower error for idx " + str(i+1) + ": " + str(num_lower_err))
+        print("Num upper error for idx " + str(i+1) + ": " + str(num_upper_err))
+        inp = output
 
 
 if __name__ == '__main__':

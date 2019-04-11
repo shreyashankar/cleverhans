@@ -158,6 +158,82 @@ class NeuralNetwork(object):
       return tf.reshape(return_vector, (self.sizes[layer_index], 1))
     return tf.reshape(return_vector, (self.sizes[layer_index + 1], 1))
 
+  def forward_pass_2(self, vector, layer_index, is_transpose=False, is_abs=False):
+    """Performs forward pass through the layer weights at layer_index.
+    Args:
+      vector: vector that has to be passed through in forward pass
+      layer_index: index of the layer
+      is_transpose: whether the weights of the layer have to be transposed
+      is_abs: whether to take the absolute value of the weights
+    Returns:
+      tensor that corresponds to the forward pass through the layer
+    Raises:
+      ValueError: if the layer_index is negative or more than num hidden layers
+    """
+    if(layer_index < 0 or layer_index > self.num_hidden_layers):
+      raise ValueError('Invalid layer index')
+
+
+    layer_type = self.layer_types[layer_index]
+    # Reshaping the input for convolution appropriately
+    if is_transpose:
+      vector = tf.reshape(vector, self.output_shapes[layer_index])
+      if (layer_type in {'ff', 'ff_relu'}):
+        return_vector = tf.matmul(tf.transpose(self.weights[layer_index]), vector)
+      elif(layer_type in {'conv', 'conv_relu'}):
+        return_vector = tf.nn.conv2d_transpose(vector, self.weights[layer_index],
+                                               output_shape=self.input_shapes[layer_index],
+                                               strides=[1, self.cnn_params[layer_index]['stride'], self.cnn_params[layer_index]['stride'], 1],
+                                               padding=self.cnn_params[layer_index]['padding'])
+      else:
+        raise NotImplementedError('Unsupported layer type: {0}'.format(self.layer_type))
+      return tf.reshape(return_vector, (self.sizes[layer_index], 1))
+
+    elif is_abs:
+      vector = tf.reshape(vector, self.input_shapes[layer_index])
+      if(layer_type in {'ff', 'ff_relu'}):
+        return_vector = tf.matmul(tf.abs(self.weights[layer_index]), vector)
+      elif(layer_type in {'conv', 'conv_relu'}):
+        return_vector = tf.nn.conv2d(vector, 
+                                    tf.abs(self.weights[layer_index]), 
+                                    strides=[1, self.cnn_params[layer_index]['stride'], self.cnn_params[layer_index]['stride'], 1],
+                                    padding=self.cnn_params[layer_index]['padding'])
+      else:
+        raise NotImplementedError('Unsupported layer type: {0}'.format(self.layer_type))
+      return tf.reshape(return_vector, (self.sizes[layer_index + 1], 1))
+
+    # Simple forward pass 
+    else:
+      vector = tf.reshape(vector, self.input_shapes[layer_index])
+      if(layer_type in {'ff', 'ff_relu'}):
+        return_vector = tf.matmul(self.weights[layer_index], vector)
+      elif (layer_type in {'conv', 'conv_relu'}):
+        return_vector = tf.nn.conv2d(vector, self.weights[layer_index], 
+                                    strides=[1, self.cnn_params[layer_index]['stride'], self.cnn_params[layer_index]['stride'], 1],
+                                    padding=self.cnn_params[layer_index]['padding'])
+      else:
+        raise NotImplementedError('Unsupported layer type: {0}'.format(self.layer_type))
+      return tf.reshape(return_vector, (self.sizes[layer_index + 1], 1))
+  
+  def nn_output(self, test_input, true_class, adv_class):
+    """ Function to print the output of forward pass according the neural net class
+      Args:
+        test_input: Input to pass through the network
+        true_class: True class of the input 
+        adv_class: Adversarial class to be considered
+    """
+    activation = test_input
+    # Assumes that all the layers are relu: has to be modified for other architectures
+    for i in range(self.num_hidden_layers):
+      activation = tf.nn.relu(self.forward_pass(activation, i) + self.biases[i])
+    # Final layer                                                                                                                                
+    activation = tf.reshape(activation, [-1, 1])
+    final_weight = self.final_weights[adv_class, :] - self.final_weights[true_class, :]
+    final_weight = tf.reshape(final_weight, [-1, 1])
+    final_constant = (self.final_bias[adv_class] - self.final_bias[true_class])
+    output = tf.reduce_sum(tf.multiply(activation, final_weight)) + final_constant
+    return output
+
 def load_network_from_checkpoint(checkpoint, model_json, input_shape=None):
   """Function to read the weights from checkpoint based on json description.
 

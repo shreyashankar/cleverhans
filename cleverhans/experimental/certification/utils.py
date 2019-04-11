@@ -186,7 +186,7 @@ def tf_lanczos_smallest_eigval(vector_prod_fn,
                                initial_vector,
                                num_iter=1000,
                                max_iter=1000,
-                               collapse_tol=1e-9,
+                               collapse_tol=1e-5,
                                dtype=tf.float32):
   """Computes smallest eigenvector and eigenvalue using Lanczos in pure TF.
 

@@ -4,7 +4,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-from scipy.sparse.linalg import eigs, LinearOperator
+from scipy.sparse.linalg import eigs, LinearOperator, lgmres
 import tensorflow as tf
 from tensorflow.contrib import autograph
 import numpy as np
@@ -108,6 +108,19 @@ class DualFormulation(object):
     self.pre_upper = self.sess.run(self.pre_upper)
     self.lower = self.sess.run(self.lower)
     self.upper = self.sess.run(self.upper)
+
+    # for i in range(len(self.lower)):
+    #   print("i: " + str(i))
+    #   print("pre lower * upper: "+ str(np.sum(np.multiply(self.pre_lower[i], self.pre_upper[i]))))
+    #   print("lower * upper: " + str(np.sum(np.multiply(self.lower[i], self.upper[i]))))
+    
+    # for i in range(len(self.lower)):
+    #   print("i: " + str(i))
+    #   print("pre lower: " + str(np.sum(self.pre_lower[i])))
+    #   print("pre upper: " + str(np.sum(self.pre_upper[i])))
+
+    # for i in range(len(self.lower)):
+    #   (self.pre_lower[i] + self.pre_upper[i])
 
     # Using the preactivation lower and upper bounds
     # to compute the linear regions
@@ -250,7 +263,9 @@ class DualFormulation(object):
     """Function that constructs minimization objective from dual variables."""
     # Checking if graphs are already created
     if self.vector_g is not None:
-      return
+      val = tf.reduce_sum(tf.multiply(tf.multiply(self.pre_lower[3], self.pre_upper[3]), self.lambda_lu[3]))
+      # val = self.lambda_lu[3]
+      return val
 
     # Computing the scalar term
     bias_sum = 0
@@ -438,8 +453,8 @@ class DualFormulation(object):
     num_iter = 0
 
     # Find an upper bound on nu
-    while min_eig_val_m - TOL < 0 and num_iter < (MAX_BINARY_SEARCH_ITER / 2):
-      num_iter += 1
+    while min_eig_val_m - TOL < 0:
+      # num_iter += 1
       upper_nu *= NU_UPDATE_CONSTANT
       feed_dict.update({self.nu: upper_nu})
       _, min_eig_val_m = self.get_lanczos_eig(compute_m=True, feed_dict=feed_dict)
@@ -480,18 +495,69 @@ class DualFormulation(object):
 
     return min_vec, min_eig
 
+  def dump_matrices(self, iter, feed_dict, g, f):
+    n = self.matrix_m_dimension
+    M = np.zeros((n, n))
+    input_vector_m = tf.placeholder(tf.float32, shape=(n, 1))
+    output_vector_m = self.get_psd_product(input_vector_m)
+    for i in range(n):
+      input_vector = np.zeros((n, 1), dtype=np.float32)
+      input_vector[i, 0] = 1.0
+      feed_dict.update({input_vector_m: input_vector})
+      M[:, i] = np.reshape(self.sess.run(output_vector_m, feed_dict=feed_dict), (n,))
+    np.save('cleverhans/experimental/certification/matrices/m_iter_' + str(iter), M)
+
+    n = self.matrix_m_dimension - 1
+    H = np.zeros((n, n))
+    input_vector_h = tf.placeholder(tf.float32, shape=(n, 1))
+    output_vector_h = self.get_h_product(input_vector_h)
+    for i in range(n):
+      input_vector = np.zeros((n, 1), dtype=np.float32)
+      input_vector[i, 0] = 1.0
+      feed_dict.update({input_vector_h: input_vector})
+      H[:, i] = np.reshape(self.sess.run(output_vector_h, feed_dict=feed_dict), (n,))
+    np.save('cleverhans/experimental/certification/matrices/h_iter_' + str(iter), H)
+
+    np.save('cleverhans/experimental/certification/matrices/g_iter_' + str(iter), g)
+    np.save('cleverhans/experimental/certification/matrices/f_iter_' + str(iter), f)
+
   def compute_certificate(self, current_step, feed_dictionary):
     """ Function to compute the certificate based either current value
     or dual variables loaded from dual folder """
     feed_dict = feed_dictionary.copy()
     nu = feed_dict[self.nu]
     second_term = self.make_m_psd(nu, feed_dict)
-    tf.logging.info('Nu after modifying: ' + str(second_term))
     feed_dict.update({self.nu: second_term})
     computed_certificate = self.sess.run(self.unconstrained_objective, feed_dict=feed_dict)
 
     tf.logging.info('Inner step: %d, current value of certificate: %f',
                     current_step, computed_certificate)
+
+    input_vector_h = tf.placeholder(tf.float32, shape=(self.matrix_m_dimension-1, 1))
+    output_vector_h = self.get_h_product(input_vector_h)
+
+    def np_vector_prod_fn_h(np_vector):
+      np_vector = np.reshape(np_vector, [-1, 1])
+      feed_dict.update({input_vector_h:np_vector})
+      output_np_vector = self.sess.run(output_vector_h, feed_dict=feed_dict)
+      return output_np_vector
+    linear_operator_h = LinearOperator((self.matrix_m_dimension-1,
+                                        self.matrix_m_dimension-1),
+                                        matvec=np_vector_prod_fn_h)
+    # Perform solver
+    g = self.sess.run(self.vector_g, feed_dict=feed_dict)
+    f = self.sess.run(self.scalar_f, feed_dict=feed_dict)
+    x, _ = lgmres(linear_operator_h, g)
+    lgm_cert = f + 0.5 * np.dot(np.squeeze(g), np.squeeze(x))
+    # print(f + 0.5 * second_term)
+    tf.logging.info('Inner step: %d, current value of certificate (w gHg): %f',
+                    current_step, lgm_cert)
+    tf.logging.info('Inner step: %d, current value of nu: %f',
+                    current_step, second_term)
+    tf.logging.info('Inner step: %d, current value of gHg: %f',
+                    current_step, 0.5 * np.dot(np.squeeze(g), np.squeeze(x)))
+    if computed_certificate < 0:
+      self.dump_matrices(current_step, feed_dict, g, f)
 
     # Sometimes due to either overflow or instability in inverses,
     # the returned certificate is large and negative -- keeping a check

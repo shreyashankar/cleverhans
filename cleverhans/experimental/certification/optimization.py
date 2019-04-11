@@ -178,33 +178,34 @@ class Optimization(object):
     self.train_step = self.optimizer.minimize(
         self.total_objective, global_step=global_step)
 
-    self.sess.run(tf.global_variables_initializer())
-
     # Projecting the dual variables
-    proj_ops = []
-    for i in range(self.dual_object.nn_params.num_hidden_layers + 1):
-      # Lambda_pos is non negative for switch indices,
-      # Unconstrained for positive indices
-      # Zero for negative indices
-      proj_ops.append(self.dual_object.lambda_pos[i].assign(
-          tf.multiply(self.dual_object.positive_indices[i],
-                      self.dual_object.lambda_pos[i])+
-          tf.multiply(self.dual_object.switch_indices[i],
-                      tf.nn.relu(self.dual_object.lambda_pos[i]))))
-      proj_ops.append(self.dual_object.lambda_neg[i].assign(
-          tf.multiply(self.dual_object.negative_indices[i],
-                      self.dual_object.lambda_neg[i])+
-          tf.multiply(self.dual_object.switch_indices[i],
-                      tf.nn.relu(self.dual_object.lambda_neg[i]))))
-      # Lambda_quad is only non zero and positive for switch
-      proj_ops.append(self.dual_object.lambda_quad[i].assign(
-          tf.multiply(self.dual_object.switch_indices[i],
-                      tf.nn.relu(self.dual_object.lambda_quad[i]))))
-      # Lambda_lu is always non negative
-      proj_ops.append(self.dual_object.lambda_lu[i].assign(
-          tf.nn.relu(self.dual_object.lambda_lu[i])))
+    with tf.control_dependencies([self.train_step]):
+      proj_ops = []
+      for i in range(self.dual_object.nn_params.num_hidden_layers + 1):
+        # Lambda_pos is non negative for switch indices,
+        # Unconstrained for positive indices
+        # Zero for negative indices
+        proj_ops.append(self.dual_object.lambda_pos[i].assign(
+            tf.multiply(self.dual_object.positive_indices[i],
+                        self.dual_object.lambda_pos[i])+
+            tf.multiply(self.dual_object.switch_indices[i],
+                        tf.nn.relu(self.dual_object.lambda_pos[i]))))
+        proj_ops.append(self.dual_object.lambda_neg[i].assign(
+            tf.multiply(self.dual_object.negative_indices[i],
+                        self.dual_object.lambda_neg[i])+
+            tf.multiply(self.dual_object.switch_indices[i],
+                        tf.nn.relu(self.dual_object.lambda_neg[i]))))
+        # Lambda_quad is only non zero and positive for switch
+        proj_ops.append(self.dual_object.lambda_quad[i].assign(
+            tf.multiply(self.dual_object.switch_indices[i],
+                        tf.nn.relu(self.dual_object.lambda_quad[i]))))
+        # Lambda_lu is always non negative
+        proj_ops.append(self.dual_object.lambda_lu[i].assign(
+            tf.nn.relu(self.dual_object.lambda_lu[i])))
 
-    self.proj_step = tf.group(proj_ops)
+      self.proj_step = tf.group(proj_ops)
+
+    self.sess.run(tf.global_variables_initializer())
 
     # Create folder for saving stats if the folder is not None
     if (self.params.get('stats_folder') and
@@ -241,11 +242,10 @@ class Optimization(object):
           self.dual_object.m_min_vec_ph: self.dual_object.m_min_vec_estimate
       })
 
-    self.sess.run(self.train_step, feed_dict=step_feed_dict)
-
     [
-        _, self.dual_object.m_min_vec_estimate, self.current_eig_val_estimate
+        _, _, self.dual_object.m_min_vec_estimate, self.current_eig_val_estimate
     ] = self.sess.run([
+        self.train_step,
         self.proj_step,
         self.eig_vec_estimate,
         self.eig_val_estimate
@@ -261,6 +261,21 @@ class Optimization(object):
             self.eig_vec_estimate,
             self.eig_val_estimate,
             self.dual_object.nu], feed_dict=step_feed_dict)
+      ret_val = self.sess.run(self.dual_object.set_differentiable_objective())
+      print("multiplication: " + str(ret_val))
+      
+      # dim = self.dual_object.matrix_m_dimension
+      # input_vector = tf.placeholder(tf.float32, shape=(dim, 1))
+      # output_vector = self.dual_object.get_psd_product(input_vector)
+
+      # def np_vector_prod_fn(np_vector):
+      #   np_vector = np.reshape(np_vector, [-1, 1])
+      #   output_np_vector = self.sess.run(output_vector, feed_dict={input_vector:np_vector})
+      #   return output_np_vector
+      # linear_operator = LinearOperator((dim, dim), matvec=np_vector_prod_fn)
+      # # Performing shift invert scipy operation when eig val estimate is available
+      # min_eig_vec_val, _ = eigs(linear_operator, k=1, which='SR', tol=1E-4)
+      # print("scipy estimate: " + str(min_eig_vec_val))
 
       stats = {
           'total_objective':
